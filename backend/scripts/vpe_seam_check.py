@@ -36,9 +36,10 @@ A seam that sits inside the normal spread is invisible and split-and-rejoin
 is viable. A seam that is a large multiple of the p95 is a pop, and the
 honest answer to the customer becomes "the upscaler is for 4-8s shots".
 
-Nothing here is Creative Studio code: it goes through ``build_payload`` and
-``VpeClient`` exactly as the app will, so a green run says the shipped path
-works and not merely that the service does.
+Nothing here is Creative Studio code: the split, the join and the request
+all come from the shipped modules - ``plan_segments``, ``media_ops`` and
+``build_payload`` through ``VpeClient`` - so a green run says the path the
+service takes works, and not merely that this script's own idea of it does.
 
     python -m scripts.vpe_seam_check --project P --bucket gs://B \\
         --source shot.mp4 --out seam_report
@@ -69,6 +70,7 @@ if str(_REPO_BACKEND) not in sys.path:
 # pylint: disable=wrong-import-position
 from src.videos.vpe.capabilities import VpeCapabilityId, get_capability
 from src.videos.vpe.client import VpeClient
+from src.videos.vpe.media_ops import concat_segments, cut_segment
 from src.videos.vpe.payloads import VpeMediaRef, VpeRequest, build_payload
 from src.videos.vpe.preflight import probe_media
 from src.videos.vpe.segmentation import plan_segments
@@ -162,10 +164,10 @@ def _plan_segments(frames: int, wanted: int) -> list[tuple[int, int]]:
 def _cut(source: Path, into: Path, first: int, frames: int, index: int) -> Path:
     """Cuts an exact frame range out of the source.
 
-    Selecting on frame number rather than seeking by timestamp because the
-    boundary has to be frame-exact: a seek that lands a frame early would
-    duplicate or drop one at the join and manufacture the very discontinuity
-    this script exists to measure.
+    Delegates to the shipped cut for the same reason ``_plan_segments``
+    delegates to the shipped planner: a seam measurement is only evidence
+    about production if it measures the cut production makes. All this
+    wrapper decides is the filename.
 
     Args:
         source: The clip to cut from.
@@ -177,29 +179,13 @@ def _cut(source: Path, into: Path, first: int, frames: int, index: int) -> Path:
     Returns:
         The path to the segment.
     """
-    target = into / f"segment_{index:02d}.mp4"
-    last = first + frames - 1
-    _ffmpeg(
-        "-i",
-        str(source),
-        "-vf",
-        f"select='between(n\\,{first}\\,{last})',setpts=N/{_FPS}/TB",
-        # setpts has already put the kept frames back on a 24 fps grid, so
-        # the encoder is told to hold that rate rather than infer one.
-        "-fps_mode",
-        "cfr",
-        "-r",
-        str(_FPS),
-        "-an",
-        "-c:v",
-        "libx264",
-        "-crf",
-        "12",
-        "-pix_fmt",
-        "yuv420p",
-        str(target),
+    return cut_segment(
+        source,
+        into / f"segment_{index:02d}.mp4",
+        first_frame=first,
+        frames=frames,
+        fps=_FPS,
     )
-    return target
 
 
 def _upload(local: Path, bucket: str, prefix: str) -> str:
@@ -282,8 +268,11 @@ def _upscale(
 def _concat(segments: list[Segment], into: Path) -> Path:
     """Joins the upscaled segments in order, without re-encoding.
 
-    Stream copy on purpose: a re-encode would apply its own quantisation
-    across the join and could either mask a real seam or invent one.
+    Delegates to the shipped join, so the measured seam is the one the
+    service's own rejoin produces. Stream copy is the reason it matters
+    here: a re-encode would apply its own quantisation across the join and
+    could either mask a real seam or invent one, and that decision needs to
+    be made once rather than in two places that can drift.
 
     Args:
         segments: Segments carrying downloaded ``upscaled`` paths.
@@ -292,25 +281,11 @@ def _concat(segments: list[Segment], into: Path) -> Path:
     Returns:
         The joined clip.
     """
-    listing = into / "concat.txt"
-    listing.write_text(
-        "".join(
-            f"file '{Path(item.upscaled).resolve()}'\n" for item in segments
-        ),
+    return concat_segments(
+        [Path(item.upscaled) for item in segments],
+        into / "rejoined.mp4",
+        listing=into / "concat.txt",
     )
-    target = into / "rejoined.mp4"
-    _ffmpeg(
-        "-f",
-        "concat",
-        "-safe",
-        "0",
-        "-i",
-        str(listing),
-        "-c",
-        "copy",
-        str(target),
-    )
-    return target
 
 
 def _frame_deltas(clip: Path) -> list[float]:
