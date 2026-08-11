@@ -47,7 +47,9 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
+from concurrent import futures
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -683,6 +685,84 @@ def _upload(local: Path, bucket: str, prefix: str) -> str:
     return uri
 
 
+def _prepare_inputs(
+    selected: list[Case],
+    fixtures_dir: Path,
+    bucket: str,
+    media_dir: str | None,
+    print_only: bool,
+) -> dict[str, str]:
+    """Builds and uploads every fixture the run needs, once, up front.
+
+    Done before any case starts rather than lazily inside each, because
+    cases share fixtures and run concurrently: a lazy upload guarded by
+    "have I seen this name" is a race that would upload the same file
+    several times, or read a URI a sibling thread had not written yet.
+
+    Args:
+        selected: The cases about to run.
+        fixtures_dir: Where to render or copy fixtures.
+        bucket: Destination bucket.
+        media_dir: Real media to prefer over generated patterns.
+        print_only: Skip the upload and predict the URI instead.
+
+    Returns:
+        Fixture filename to Cloud Storage URI.
+    """
+    wanted: dict[str, Fixture] = {}
+    for case in selected:
+        for fixture in case.fixtures:
+            wanted.setdefault(fixture.name, fixture)
+
+    uris: dict[str, str] = {}
+    for name, fixture in wanted.items():
+        local = fixture.build(fixtures_dir, _supplied_media(media_dir, fixture))
+        if print_only:
+            uris[name] = f"{bucket}/vpe-smoke/in/{name}"
+            continue
+        print(f"  uploading {name}", flush=True)
+        uris[name] = _upload(local, bucket, "vpe-smoke/in")
+    return uris
+
+
+def _waves(selected: list[Case]) -> list[list[Case]]:
+    """Groups cases so everything in a wave can run at once.
+
+    Two capabilities consume another's output - performance generation
+    needs the blue mesh, and the seamless upscaler needs the texture it is
+    upscaling - so those cannot start until their producer has finished.
+    Everything else is independent.
+
+    Args:
+        selected: The cases to order.
+
+    Returns:
+        Waves, each safe to run concurrently, in order.
+    """
+    remaining = list(selected)
+    keys = {case.key for case in selected}
+    done: set[str] = set()
+    ordered: list[list[Case]] = []
+    while remaining:
+        ready = [
+            case
+            for case in remaining
+            # A dependency outside the selection cannot be waited for, so
+            # the case runs and reports its own failure rather than
+            # blocking the run for ever.
+            if not case.depends_on
+            or case.depends_on in done
+            or case.depends_on not in keys
+        ]
+        if not ready:
+            ordered.append(remaining)
+            break
+        ordered.append(ready)
+        done.update(case.key for case in ready)
+        remaining = [case for case in remaining if case not in ready]
+    return ordered
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """Builds, sends and records one or many capability calls."""
     bucket = args.bucket.rstrip("/")
@@ -707,34 +787,53 @@ def cmd_run(args: argparse.Namespace) -> int:
         project_id=args.project, location=args.location, dry_run=args.print_curl
     )
 
-    uris: dict[str, str] = {}
+    uris = _prepare_inputs(
+        selected, fixtures_dir, bucket, args.media_dir, args.print_curl
+    )
     if args.print_curl:
         # Chained cases normally take these from the preceding job's output.
         # A printed run has no preceding job, so stand in a plausible URI:
         # without one the builder rightly refuses an empty gcsUri and the two
         # chained payloads - the ones worth inspecting most - never render.
         uris["__blue_mesh__"] = (
-            f"{bucket}/vpe-smoke/out/perf_estimation/" "sample_0.mp4"
+            f"{bucket}/vpe-smoke/out/perf_estimation/sample_0.mp4"
         )
         uris["__texture__"] = (
-            f"{bucket}/vpe-smoke/out/video_textures/" "sample_0.mp4"
+            f"{bucket}/vpe-smoke/out/video_textures/sample_0.mp4"
         )
+
     rows: list[dict[str, Any]] = []
     csv_path = report / "results.csv"
+    lock = threading.Lock()
 
-    for case in selected:
-        print(f"\n=== {case.key} ({case.capability_id.value}) ===")
+    def record(row: dict[str, Any], log: list[str]) -> None:
+        """Publishes one case's outcome and its buffered output."""
+        with lock:
+            rows.append(row)
+            _write_csv(csv_path, rows)
+            print("\n".join(log), flush=True)
+
+    def run_case(case: Case) -> None:
+        """Runs one case start to finish, reporting rather than raising.
+
+        Output is buffered and printed in one go under the lock: with
+        several jobs in flight, line-by-line printing interleaves into
+        something unreadable.
+        """
+        log = [f"\n=== {case.key} ({case.capability_id.value}) ==="]
         if case.note:
-            print(f"    {case.note}")
-        # A printed run never sends anything, so a dependency can only ever
-        # be PRINTED; requiring SUCCESS there would hide the two chained
-        # payloads, which are the ones most worth eyeballing before a live run.
+            log.append(f"    {case.note}")
+
         satisfied = {"SUCCESS", "PRINTED"} if args.print_curl else {"SUCCESS"}
-        if case.depends_on and case.depends_on not in {
-            r["case"] for r in rows if r["status"] in satisfied
-        }:
-            print(f"    SKIPPED: needs {case.depends_on} to have succeeded")
-            rows.append(
+        with lock:
+            met = case.depends_on in {
+                r["case"] for r in rows if r["status"] in satisfied
+            }
+        if case.depends_on and not met:
+            log.append(
+                f"    SKIPPED: needs {case.depends_on} to have succeeded"
+            )
+            record(
                 {
                     "case": case.key,
                     "model": case.capability_id.value,
@@ -742,30 +841,19 @@ def cmd_run(args: argparse.Namespace) -> int:
                     "detail": f"depends on {case.depends_on}",
                     "seconds": 0,
                     "output": "",
-                }
+                },
+                log,
             )
-            _write_csv(csv_path, rows)
-            continue
+            return
 
         try:
-            for fixture in case.fixtures:
-                local = fixture.build(
-                    fixtures_dir,
-                    _supplied_media(args.media_dir, fixture),
-                )
-                if fixture.name not in uris and not args.print_curl:
-                    uris[fixture.name] = _upload(local, bucket, "vpe-smoke/in")
-                elif args.print_curl:
-                    uris.setdefault(
-                        fixture.name, f"{bucket}/vpe-smoke/in/{fixture.name}"
-                    )
-
+            with lock:
+                snapshot = dict(uris)
             out_dir = f"{bucket}/vpe-smoke/out/{case.key}/"
-            request = case.make_request(uris, out_dir)
-            payload = build_payload(request)
+            payload = build_payload(case.make_request(snapshot, out_dir))
         except Exception as exc:  # noqa: BLE001 - report, never abort the run
-            print(f"    BUILD FAILED: {exc}")
-            rows.append(
+            log.append(f"    BUILD FAILED: {exc}")
+            record(
                 {
                     "case": case.key,
                     "model": case.capability_id.value,
@@ -773,18 +861,18 @@ def cmd_run(args: argparse.Namespace) -> int:
                     "detail": str(exc),
                     "seconds": 0,
                     "output": "",
-                }
+                },
+                log,
             )
-            _write_csv(csv_path, rows)
-            continue
+            return
 
         (report / "requests" / f"{case.key}.json").write_text(
             json.dumps(payload, indent=2)
         )
 
         if args.print_curl:
-            print(_as_curl(client, payload))
-            rows.append(
+            log.append(_as_curl(client, payload))
+            record(
                 {
                     "case": case.key,
                     "model": case.capability_id.value,
@@ -792,29 +880,28 @@ def cmd_run(args: argparse.Namespace) -> int:
                     "detail": "",
                     "seconds": 0,
                     "output": "",
-                }
+                },
+                log,
             )
-            _write_csv(csv_path, rows)
-            continue
+            return
 
         started = time.time()
         try:
             operation = client.submit(payload)
-            print(f"    operation {operation.operation_id}")
+            log.append(f"    operation {operation.operation_id}")
             result = client.wait_for_completion_sync(
-                operation,
-                timeout_seconds=args.timeout,
-                on_poll=lambda _op: print("    still running...", flush=True),
+                operation, timeout_seconds=args.timeout
             )
             elapsed = round(time.time() - started, 1)
             uri = _result_uri(result)
             if case.feeds:
-                uris[case.feeds] = uri
-            print(f"    SUCCESS in {elapsed}s -> {uri}")
+                with lock:
+                    uris[case.feeds] = uri
+            log.append(f"    SUCCESS in {elapsed}s -> {uri}")
             (report / "responses" / f"{case.key}.json").write_text(
                 json.dumps(_jsonable(result), indent=2, default=str)
             )
-            rows.append(
+            record(
                 {
                     "case": case.key,
                     "model": case.capability_id.value,
@@ -822,15 +909,16 @@ def cmd_run(args: argparse.Namespace) -> int:
                     "detail": "",
                     "seconds": elapsed,
                     "output": uri,
-                }
+                },
+                log,
             )
         except Exception as exc:  # noqa: BLE001 - a failure body is the point
             elapsed = round(time.time() - started, 1)
-            print(f"    FAILED in {elapsed}s: {type(exc).__name__}: {exc}")
+            log.append(f"    FAILED in {elapsed}s: {type(exc).__name__}: {exc}")
             (report / "responses" / f"{case.key}.error.txt").write_text(
                 f"{type(exc).__name__}: {exc}"
             )
-            rows.append(
+            record(
                 {
                     "case": case.key,
                     "model": case.capability_id.value,
@@ -838,12 +926,31 @@ def cmd_run(args: argparse.Namespace) -> int:
                     "detail": f"{type(exc).__name__}: {exc}"[:500],
                     "seconds": elapsed,
                     "output": "",
-                }
+                },
+                log,
             )
-        _write_csv(csv_path, rows)
+
+    waves = _waves(selected)
+    for index, wave in enumerate(waves, start=1):
+        if len(waves) > 1:
+            print(
+                f"\n--- wave {index} of {len(waves)}: "
+                f"{', '.join(c.key for c in wave)}",
+                flush=True,
+            )
+        # Capped rather than unbounded: the service documents a high-load
+        # rejection, and a dozen 4K jobs at once is the surest way to
+        # provoke one and mistake it for a defect in the request.
+        workers = max(1, min(args.concurrency, len(wave)))
+        if workers == 1:
+            for case in wave:
+                run_case(case)
+        else:
+            with futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                list(pool.map(run_case, wave))
 
     print(f"\nreport written to {report}/")
-    print(f"  results.csv, requests/*.json, responses/*")
+    print("  results.csv, requests/*.json, responses/*")
     return 0
 
 
@@ -933,6 +1040,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="directory of real media to use instead of generated test "
         "patterns; see the 'media' subcommand for the filenames",
+    )
+    run.add_argument(
+        "--concurrency",
+        type=int,
+        default=4,
+        help="jobs in flight at once within a wave (default 4). The service "
+        "documents a high-load rejection, so this is capped rather than "
+        "unbounded; use 1 to reproduce the old sequential behaviour",
     )
     run.add_argument("--timeout", type=int, default=1800)
     run.add_argument("--report-dir", default="vpe_smoke_out")
