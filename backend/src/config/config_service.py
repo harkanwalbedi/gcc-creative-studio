@@ -73,6 +73,25 @@ class ConfigService(BaseSettings):
     # --- Veo ---
     VEO_MODEL_ID: str = "veo-3.1-generate-001"
 
+    # --- Veo Pro Experimental (VPE) ---
+    # Allowlist-gated private preview, so it ships dark: a deployment without
+    # an allowlisted project must never see or call any of it.
+    VPE_ENABLED: bool = False
+    # Not LOCATION. That defaults to "global", which the Veo SDK path accepts
+    # but the veo-experimental publisher endpoint does not: it is reached at
+    # {location}-aiplatform.googleapis.com, and every documented sample calls
+    # us-central1. Reusing LOCATION would build a hostname that resolves to
+    # nothing on a default deployment.
+    VPE_LOCATION: str = "us-central1"
+    # VPE reads and writes Cloud Storage only, and both buckets must sit
+    # inside the allowlisted project, which is not necessarily the project
+    # holding GENMEDIA_BUCKET. Left empty on purpose rather than defaulted:
+    # a wrong bucket fails deep inside a long-running job.
+    VPE_BUCKET: str = ""
+    # Renders and logs the request payload instead of calling the API, so the
+    # whole path can be walked without allowlist access.
+    VPE_DRY_RUN: bool = False
+
     # --- VTO ---
     VTO_MODEL_ID: str = "virtual-try-on-001"
 
