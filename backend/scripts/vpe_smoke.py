@@ -44,6 +44,7 @@ import argparse
 import csv
 import json
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -102,10 +103,35 @@ class Fixture:
 
     name: str
     ffmpeg_args: list[str]
+    wants: str = ""
 
-    def build(self, into: Path) -> Path:
-        """Renders the fixture with ffmpeg if it is not already present."""
+    def build(self, into: Path, supplied: Path | None = None) -> Path:
+        """Provides the fixture, preferring real media over a test pattern.
+
+        The generated defaults are ffmpeg test patterns and a sine tone.
+        They prove a payload is accepted, which is all a smoke test needs,
+        but they cannot show whether a capability does anything useful: a
+        colour-bar plate has no face to animate and a tone has nothing to
+        lip-sync to. Where a real clip or frame is supplied it is used
+        instead, and the run becomes a judgement of output quality rather
+        than only of wire correctness.
+
+        Args:
+            into: Directory to render or copy into.
+            supplied: A real file to use in place of the generated one.
+
+        Returns:
+            The path to use.
+
+        Raises:
+            RuntimeError: If ffmpeg fails to render the fallback.
+        """
         path = into / self.name
+        if supplied is not None:
+            # Copied rather than referenced so the report holds exactly what
+            # was sent, even if the original moves later.
+            shutil.copyfile(supplied, path)
+            return path
         if path.exists():
             return path
         code, out = _run(
@@ -134,6 +160,7 @@ _UPSCALE_SRC = Fixture(
         "-c:v",
         "libx264",
     ],
+    wants="a 24fps clip of 4-8s, 720p or 1080p, either orientation",
 )
 _TRANSFORM_SRC = Fixture(
     "transform_src.mp4",
@@ -147,6 +174,7 @@ _TRANSFORM_SRC = Fixture(
         "-c:v",
         "libx264",
     ],
+    wants="a 24fps landscape 1280x720 clip of up to 8s",
 )
 _MASK_SRC = Fixture(
     "mask.mp4",
@@ -161,6 +189,7 @@ _MASK_SRC = Fixture(
         "-c:v",
         "libx264",
     ],
+    wants="a greyscale mask video matching transform_src.mp4 in size and length",
 )
 _PERF_SRC = Fixture(
     "perf_actor.mp4",
@@ -177,10 +206,12 @@ _PERF_SRC = Fixture(
         "-c:v",
         "libx264",
     ],
+    wants="a 24fps landscape 1280x720 clip of an actor, exactly 192 frames",
 )
 _STILL = Fixture(
     "still.png",
     ["-f", "lavfi", "-i", f"testsrc=size={_LANDSCAPE}", "-frames:v", "1"],
+    wants="a 1280x720 still, ideally a character close-up for lip-sync",
 )
 _VOICE = Fixture(
     "voice.wav",
@@ -194,6 +225,7 @@ _VOICE = Fixture(
         "-ar",
         "48000",
     ],
+    wants="up to 8s of real recorded speech - a tone proves nothing about lip-sync",
 )
 _PORTRAIT = Fixture(
     "portrait_src.mp4",
@@ -208,6 +240,7 @@ _PORTRAIT = Fixture(
         "-c:v",
         "libx264",
     ],
+    wants="a 24fps 720x1280 vertical clip of 4-8s",
 )
 
 
@@ -594,6 +627,53 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def _supplied_media(media_dir: str | None, fixture: Fixture) -> Path | None:
+    """Finds a real file to use in place of a generated fixture.
+
+    Matched by filename so the mapping is visible in a directory listing
+    rather than buried in a flag. Anything absent falls back to the
+    generated pattern, so a partial set is fine - supplying only a real
+    voice track and a real face still makes the lip-sync result meaningful
+    while everything else stays synthetic.
+
+    Args:
+        media_dir: Directory of real media, or None.
+        fixture: The fixture wanting a file.
+
+    Returns:
+        The path to use, or None to generate.
+    """
+    if not media_dir:
+        return None
+    candidate = Path(media_dir) / fixture.name
+    return candidate if candidate.is_file() else None
+
+
+def cmd_media(args: argparse.Namespace) -> int:
+    """Lists the real media the run can use, and what each slot wants."""
+    supplied = Path(args.media_dir) if args.media_dir else None
+    print(
+        "Real media beats the generated test patterns wherever output "
+        "quality matters.\nDrop a file with the matching name into "
+        "--media-dir; anything missing is generated.\n",
+    )
+    for fixture in (
+        _UPSCALE_SRC,
+        _PORTRAIT,
+        _TRANSFORM_SRC,
+        _MASK_SRC,
+        _PERF_SRC,
+        _STILL,
+        _VOICE,
+    ):
+        found = ""
+        if supplied is not None:
+            path = supplied / fixture.name
+            found = "  <- SUPPLIED" if path.is_file() else "  (generated)"
+        print(f"  {fixture.name:20} {fixture.wants}{found}")
+    return 0
+
+
 def _upload(local: Path, bucket: str, prefix: str) -> str:
     """Copies a fixture into the VPE bucket, returning its URI."""
     uri = f"{bucket.rstrip('/')}/{prefix}/{local.name}"
@@ -669,7 +749,10 @@ def cmd_run(args: argparse.Namespace) -> int:
 
         try:
             for fixture in case.fixtures:
-                local = fixture.build(fixtures_dir)
+                local = fixture.build(
+                    fixtures_dir,
+                    _supplied_media(args.media_dir, fixture),
+                )
                 if fixture.name not in uris and not args.print_curl:
                     uris[fixture.name] = _upload(local, bucket, "vpe-smoke/in")
                 elif args.print_curl:
@@ -845,9 +928,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="render requests without sending; needs no " "allowlist",
     )
+    run.add_argument(
+        "--media-dir",
+        default=None,
+        help="directory of real media to use instead of generated test "
+        "patterns; see the 'media' subcommand for the filenames",
+    )
     run.add_argument("--timeout", type=int, default=1800)
     run.add_argument("--report-dir", default="vpe_smoke_out")
     run.set_defaults(func=cmd_run)
+
+    media = sub.add_parser(
+        "media",
+        help="list what real media each case can use",
+    )
+    media.add_argument("--media-dir", default=None)
+    media.set_defaults(func=cmd_media)
 
     args = parser.parse_args(argv)
     return int(args.func(args))
