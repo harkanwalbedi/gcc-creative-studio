@@ -1,0 +1,2 @@
+file '/usr/local/google/home/hsbedi/python-projects/gcc-creative-studio/backend/seam_report/upscaled_00.mp4'
+file '/usr/local/google/home/hsbedi/python-projects/gcc-creative-studio/backend/seam_report/upscaled_01.mp4'
