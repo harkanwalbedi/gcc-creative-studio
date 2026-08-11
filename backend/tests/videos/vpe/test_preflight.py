@@ -22,8 +22,8 @@ preference.
   material this feature will actually be pointed at, and they are the reason
   frame count rather than container duration is authoritative: they carry
   exactly 240 frames in a container that reports 10.005 seconds. That
-  directory is gitignored, so every test that needs it skips when it is
-  absent rather than failing somewhere it was never checked out.
+  directory is gitignored, so where it is absent an equivalent is generated
+  to the same specification rather than skipped - see ``_corpus``.
 * Files generated with ffmpeg into a temporary directory, for the off-spec
   cases no real clip in the repo covers - 30 fps, 23.976 fps, 640x360,
   ProRes, stills and audio. Nothing is written into the repository.
@@ -36,7 +36,9 @@ preference.
 import pathlib
 import shutil
 import subprocess
+import tempfile
 from fractions import Fraction
+from typing import NamedTuple
 
 import pytest
 
@@ -56,45 +58,209 @@ from src.videos.vpe.preflight import (
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _CORPUS_ROOT = _REPO_ROOT / "_review"
 
+_CORPUS_FPS = 24
+
+
+class _CorpusClip(NamedTuple):
+    """A real clip, and the specification a stand-in has to meet without it.
+
+    Every field was measured off the real file with ffprobe rather than
+    assumed, because the point of a stand-in is that it probes identically.
+
+    Attributes:
+        path: Location under ``_review/``, relative to the corpus root.
+        width: Frame width in pixels.
+        height: Frame height in pixels.
+        frames: Exact frame count. Every corpus clip runs at 24 fps.
+        audio: Whether the clip carries an AAC track at 48 kHz.
+        container_seconds: What the container reports. This is not always
+            ``frames / 24``: on most of these the audio track outruns the
+            video by a few milliseconds and the container follows the longer
+            stream, which is the discrepancy the module exists to survive.
+    """
+
+    path: str
+    width: int
+    height: int
+    frames: int
+    audio: bool
+    container_seconds: float
+
+
 # Real Veo output, picked for the spread of frame counts and orientations.
 # Every one of these probes at exactly 24 fps.
 _CORPUS = {
-    # 1280x720, 120 frames, AAC.
-    "landscape_120": "tag-adherence/ab_swap/A-tagged-1.mp4",
-    # 1280x720, 240 frames, AAC.
-    "landscape_240": "woman-swap/denim-1.mp4",
-    # 1280x720, 240 frames, no audio track at all.
-    "landscape_240_silent": "woman-swap/source_train_noaudio.mp4",
-    # 720x1280, 120 frames, no audio track.
-    "portrait_120_silent": "tag-adherence/source/source_clip.mp4",
-    # 720x1280, 144 frames, AAC.
-    "portrait_144": "videos/T1-01.mp4",
-    # 720x1280, 192 frames, AAC.
-    "portrait_192": "videos/T3-01.mp4",
-    # 720x1280, 216 frames, AAC.
-    "portrait_216": "micronovela-shots/s2_ballroom_enriqueta.mp4",
-    # 720x1280, 240 frames, AAC.
-    "portrait_240": "cantina-first-encounter/cantina_first_encounter.mp4",
+    "landscape_120": _CorpusClip(
+        path="tag-adherence/ab_swap/A-tagged-1.mp4",
+        width=1280,
+        height=720,
+        frames=120,
+        audio=True,
+        container_seconds=5.013,
+    ),
+    "landscape_240": _CorpusClip(
+        path="woman-swap/denim-1.mp4",
+        width=1280,
+        height=720,
+        frames=240,
+        audio=True,
+        container_seconds=10.005,
+    ),
+    "landscape_240_silent": _CorpusClip(
+        path="woman-swap/source_train_noaudio.mp4",
+        width=1280,
+        height=720,
+        frames=240,
+        audio=False,
+        container_seconds=10.0,
+    ),
+    "portrait_120_silent": _CorpusClip(
+        path="tag-adherence/source/source_clip.mp4",
+        width=720,
+        height=1280,
+        frames=120,
+        audio=False,
+        container_seconds=5.0,
+    ),
+    "portrait_144": _CorpusClip(
+        path="videos/T1-01.mp4",
+        width=720,
+        height=1280,
+        frames=144,
+        audio=True,
+        container_seconds=6.016,
+    ),
+    "portrait_192": _CorpusClip(
+        path="videos/T3-01.mp4",
+        width=720,
+        height=1280,
+        frames=192,
+        audio=True,
+        container_seconds=8.0,
+    ),
+    "portrait_216": _CorpusClip(
+        path="micronovela-shots/s2_ballroom_enriqueta.mp4",
+        width=720,
+        height=1280,
+        frames=216,
+        audio=True,
+        container_seconds=9.002,
+    ),
+    "portrait_240": _CorpusClip(
+        path="cantina-first-encounter/cantina_first_encounter.mp4",
+        width=720,
+        height=1280,
+        frames=240,
+        audio=True,
+        container_seconds=10.005,
+    ),
 }
 
 _HAS_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
 
+# Stand-ins are cached between runs, outside the repository. The filename
+# carries the whole specification, so changing a spec asks for a file that
+# does not exist yet rather than silently reusing one built to the old one.
+_STANDIN_ROOT = pathlib.Path(tempfile.gettempdir()) / "vpe_preflight_corpus"
+
+
+def _build_standin(name: str, spec: _CorpusClip) -> str:
+    """Builds a clip that probes identically to a corpus clip.
+
+    The audio is encoded separately and muxed in with ``-c copy``, which
+    looks roundabout but is the only way it keeps a duration of its own:
+    encoding both streams in one pass ends the audio with the video and
+    loses the container overhang, and that overhang is the whole point of
+    several of these tests.
+
+    Args:
+        name: A key of ``_CORPUS``.
+        spec: The specification to meet.
+
+    Returns:
+        The absolute path to the built clip.
+    """
+    audio = "aac" if spec.audio else "silent"
+    stem = (
+        f"{name}_{spec.width}x{spec.height}"
+        f"_{spec.frames}f_{spec.container_seconds:.3f}s_{audio}"
+    )
+    target = _STANDIN_ROOT / f"{stem}.mp4"
+    if target.is_file():
+        return str(target)
+
+    _STANDIN_ROOT.mkdir(parents=True, exist_ok=True)
+    video_seconds = spec.frames / _CORPUS_FPS
+    with tempfile.TemporaryDirectory(dir=_STANDIN_ROOT) as scratch_name:
+        scratch = pathlib.Path(scratch_name)
+        built = scratch / "video.mp4"
+        _ffmpeg(
+            "-f",
+            "lavfi",
+            "-i",
+            f"testsrc=size={spec.width}x{spec.height}"
+            f":rate={_CORPUS_FPS}:duration={video_seconds}",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-frames:v",
+            str(spec.frames),
+            str(built),
+        )
+        if spec.audio:
+            track = scratch / "audio.m4a"
+            _ffmpeg(
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:sample_rate=48000"
+                f":duration={spec.container_seconds}",
+                "-c:a",
+                "aac",
+                "-t",
+                str(spec.container_seconds),
+                str(track),
+            )
+            muxed = scratch / "muxed.mp4"
+            _ffmpeg(
+                "-i", str(built), "-i", str(track), "-c", "copy", str(muxed)
+            )
+            built = muxed
+        # Moved into place only once complete, so an interrupted run cannot
+        # leave a truncated file for the next one to trust.
+        built.replace(target)
+    return str(target)
+
 
 def _corpus(name: str) -> str:
-    """Returns a real clip's path, skipping the test if it is not checked out.
+    """Returns a clip meeting ``name``'s specification.
+
+    The real clip under ``_review/`` is used wherever it is checked out,
+    because it is genuine model output and nothing synthetic is as
+    convincing. That directory is gitignored, so everywhere else an
+    equivalent is generated instead: same dimensions, same exact frame count
+    at 24 fps, same audio track, same container duration. Those are the only
+    properties these tests measure, so the stand-in tests the same thing.
+
+    Skipping was the previous behaviour and it was worse than useless: 83
+    tests reported green on every machine but the one laptop the corpus
+    happens to live on, which is the shape of a suite that is not running at
+    all rather than one that is passing.
 
     Args:
         name: A key of ``_CORPUS``.
 
     Returns:
-        The absolute path to the clip.
+        The absolute path to a clip meeting the specification.
     """
     if not _HAS_FFMPEG:
-        pytest.skip("ffprobe is not installed")
-    path = _CORPUS_ROOT / _CORPUS[name]
-    if not path.is_file():
-        pytest.skip(f"Sample corpus clip not present: {path}")
-    return str(path)
+        pytest.skip("ffmpeg and ffprobe are not installed")
+    spec = _CORPUS[name]
+    real = _CORPUS_ROOT / spec.path
+    if real.is_file():
+        return str(real)
+    return _build_standin(name, spec)
 
 
 def _ffmpeg(*args: str) -> None:
