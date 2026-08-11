@@ -296,3 +296,62 @@ class TestRestoreAudio:
         result = restore_audio(video, silent_source, tmp_path / "final3.mp4")
         assert result == video
         assert not (tmp_path / "final3.mp4").exists()
+
+    def test_audio_shorter_than_video_does_not_truncate_the_master(
+        self,
+        tmp_path: Path,
+    ):
+        """Regression: ``-shortest`` alone cuts the master to the audio.
+
+        A field clip surfaced an audio track shorter than its video by more
+        than a frame - not the few-millisecond overrun this module was built
+        for, but the opposite direction. Without padding, ``-shortest``
+        picked the audio as the shorter stream and the 4K master came back
+        missing the frames past where the sound ran out. ``apad`` closes
+        that gap so the video length always wins.
+        """
+        video = tmp_path / "video.mp4"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                f"testsrc=size=320x180:rate={_FPS}:duration=10",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-an",
+                "-frames:v",
+                "240",
+                str(video),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        short_audio_source = tmp_path / "short_audio.mp4"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=5",
+                "-c:a",
+                "aac",
+                str(short_audio_source),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        restored = restore_audio(
+            video, short_audio_source, tmp_path / "final4.mp4"
+        )
+        assert _frame_count(restored) == 240
