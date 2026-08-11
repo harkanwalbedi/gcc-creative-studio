@@ -1,0 +1,80 @@
+<!--
+ Copyright 2026 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+<div class="upscale-dialog-container glass-morphism">
+  <div class="dialog-header">
+    <h2 class="dialog-title">Upscale Video</h2>
+    <p class="dialog-subtitle">
+      Splits and upscales the clip if needed, then rejoins it with the
+      original audio. This can take several minutes.
+    </p>
+  </div>
+
+  <div class="dialog-content">
+    <div class="field">
+      <span class="field-label">Resolution</span>
+      <studio-dropdown
+        [options]="resolutionOptions"
+        [value]="resolution"
+        (valueChange)="onResolutionChange($event)"
+      ></studio-dropdown>
+    </div>
+
+    <div class="field">
+      <studio-slider
+        label="Sharpness"
+        [valueText]="sharpness.toString()"
+        [min]="0"
+        [max]="4"
+        [step]="1"
+        [value]="sharpness"
+        (valueChange)="onSharpnessChange($event)"
+      ></studio-slider>
+    </div>
+
+    <div class="warnings" *ngIf="warnings.length">
+      <div class="warning-item" *ngFor="let finding of warnings">
+        <mat-icon>info_outline</mat-icon>
+        <span>{{ finding.message }}</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="dialog-footer">
+    <studio-button
+      variant="primary"
+      size="medium"
+      (click)="dialogRef.close()"
+      [disabled]="isSubmitting"
+    >
+      Cancel
+    </studio-button>
+    <studio-button
+      variant="primary"
+      size="medium"
+      (click)="confirm()"
+      [disabled]="isSubmitting"
+    >
+      <mat-progress-spinner
+        *ngIf="isSubmitting"
+        mode="indeterminate"
+        [diameter]="18"
+        class="inline-spinner"
+      ></mat-progress-spinner>
+      {{ isSubmitting ? 'Starting...' : 'Start Upscale' }}
+    </studio-button>
+  </div>
+</div>

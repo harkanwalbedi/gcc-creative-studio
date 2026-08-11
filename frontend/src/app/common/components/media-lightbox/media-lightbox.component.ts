@@ -27,6 +27,7 @@ import {
 } from '@angular/core';
 import {MediaItem} from '../../models/media-item.model';
 import {GalleryItem} from '../../models/gallery-item.model';
+import {VpeScreeningResponse} from '../../models/vpe.model';
 import PhotoSwipeLightbox from 'photoswipe/lightbox';
 import {Clipboard} from '@angular/cdk/clipboard';
 import {MatSnackBar} from '@angular/material/snack-bar';
@@ -72,6 +73,16 @@ export class MediaLightboxComponent
   @Input() showOmniButton = false;
   @Input() showExtendButton = false;
   @Input() showConcatenateButton = false;
+  @Input() showUpscaleButton = false;
+
+  /**
+   * The host fetches this when the item loads and passes it down, rather
+   * than the lightbox fetching it itself - the lightbox is otherwise a pure
+   * presentational component with no HTTP calls of its own, and screening
+   * is a per-item async answer the host is already positioned to cache.
+   * Undefined means "not checked yet", not "not eligible".
+   */
+  @Input() vpeScreening: VpeScreeningResponse | undefined;
 
   /**
    * Offered but unusable, so the button is shown disabled carrying this rather
@@ -80,6 +91,32 @@ export class MediaLightboxComponent
    */
   readonly noStoredClipReason =
     'This clip has no stored file, so it cannot be sent to the video tools';
+
+  /**
+   * Whether the upscale action is worth offering. Screening can only rule a
+   * clip out, never confirm it, so this is true both when the check found
+   * nothing wrong and when it could not tell - the worker re-verifies the
+   * actual file before spending anything.
+   */
+  get canUpscale(): boolean {
+    return !!this.vpeScreening?.offer;
+  }
+
+  get upscaleDisabledReason(): string {
+    if (!this.hasStoredClip) {
+      return this.noStoredClipReason;
+    }
+    if (!this.vpeScreening) {
+      return 'Checking eligibility...';
+    }
+    if (!this.vpeScreening.offer) {
+      return (
+        this.vpeScreening.findings[0]?.message ||
+        'This clip cannot be upscaled.'
+      );
+    }
+    return 'Upscale to 1080p or 4K';
+  }
 
   get isImage(): boolean {
     return this.mediaItem?.mimeType?.startsWith('image/') ?? false;
@@ -113,6 +150,10 @@ export class MediaLightboxComponent
     selectedIndex: number;
   }>();
   @Output() concatenateClicked = new EventEmitter<{
+    mediaItem: MediaItem;
+    selectedIndex: number;
+  }>();
+  @Output() upscaleClicked = new EventEmitter<{
     mediaItem: MediaItem;
     selectedIndex: number;
   }>();
@@ -554,6 +595,15 @@ export class MediaLightboxComponent
   onConcatenateClick() {
     if (this.mediaItem && this.hasStoredClip) {
       this.concatenateClicked.emit({
+        mediaItem: this.mediaItem as MediaItem,
+        selectedIndex: this.selectedIndex,
+      });
+    }
+  }
+
+  onUpscaleClick() {
+    if (this.mediaItem && this.hasStoredClip && this.canUpscale) {
+      this.upscaleClicked.emit({
         mediaItem: this.mediaItem as MediaItem,
         selectedIndex: this.selectedIndex,
       });

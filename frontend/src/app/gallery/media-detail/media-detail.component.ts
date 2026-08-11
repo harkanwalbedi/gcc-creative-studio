@@ -27,16 +27,20 @@ import {
 import {GalleryItem} from '../../common/models/gallery-item.model';
 import {CreatePromptMediaDto} from '../../common/models/prompt.model';
 import {SourceMediaItemLink} from '../../common/models/search.model';
+import {VpeScreeningResponse} from '../../common/models/vpe.model';
 import {AuthService} from '../../common/services/auth.service';
 import {LoadingService} from '../../common/services/loading.service';
 import {MimeTypeEnum} from '../../fun-templates/media-template.model';
 import {
   handleErrorSnackbar,
+  handleInfoSnackbar,
   handleSuccessSnackbar,
 } from '../../utils/handleMessageSnackbar';
 import {GalleryService} from '../gallery.service';
 import {ConfirmationDialogComponent} from '../../common/components/confirmation-dialog/confirmation-dialog.component';
+import {VpeUpscaleDialogComponent} from '../../common/components/vpe-upscale-dialog/vpe-upscale-dialog.component';
 import {WorkspaceStateService} from '../../services/workspace/workspace-state.service';
+import {VpeService} from '../../services/vpe/vpe.service';
 
 @Component({
   selector: 'app-media-detail',
@@ -56,6 +60,7 @@ export class MediaDetailComponent implements OnDestroy {
   public isIdentityExpanded = false;
   public selectedAssetForLightbox: GalleryItem | null = null;
   public lightboxInitialIndex = 0;
+  public vpeScreening: VpeScreeningResponse | undefined;
 
   get identityFields(): {label: string; value: any; type: string}[] {
     if (!this.mediaItem) return [];
@@ -154,6 +159,7 @@ export class MediaDetailComponent implements OnDestroy {
     private authService: AuthService,
     private sanitizer: DomSanitizer,
     private workspaceStateService: WorkspaceStateService,
+    private vpeService: VpeService,
     public dialog: MatDialog,
   ) {
     // Check if user is admin
@@ -191,6 +197,7 @@ export class MediaDetailComponent implements OnDestroy {
         this.loadingService.hide();
         this.readInitialIndexFromUrl();
         this.parsePrompt();
+        this.fetchVpeScreening();
         console.log('fetchMediaDetails - mediaItem', this.mediaItem);
       },
       error: err => {
@@ -200,6 +207,63 @@ export class MediaDetailComponent implements OnDestroy {
         handleErrorSnackbar(this._snackBar, err, 'Fetch details');
       },
     });
+  }
+
+  /**
+   * Checks whether the loaded item is worth offering the upscale action on.
+   *
+   * Only media items are eligible - a source asset has no `id` the VPE
+   * routes recognise as a gallery row - and only video, since the check
+   * itself validates against the upscaler's video input rules. A failure
+   * here is silent rather than a snackbar: this runs on every detail page
+   * view, and a screening call that cannot complete should leave the
+   * button absent, not interrupt someone looking at an image.
+   */
+  private fetchVpeScreening(): void {
+    this.vpeScreening = undefined;
+    const isVideo = this.mediaItem?.mimeType?.startsWith('video/') ?? false;
+    if (
+      !this.mediaItem ||
+      this.mediaItem.itemType !== 'media_item' ||
+      !isVideo
+    ) {
+      return;
+    }
+
+    this.vpeService.screenForUpscale(this.mediaItem.id).subscribe({
+      next: screening => {
+        this.vpeScreening = screening;
+      },
+      error: err => {
+        console.error('VPE screening failed', err);
+      },
+    });
+  }
+
+  // Bare strings on the wire (SourceMediaItemLink.role is untyped, matching
+  // the backend's AssetRoleEnum) so this is a display convenience, not a
+  // contract - an unlisted role still shows, just title-cased from its raw
+  // value, rather than the section going unlabeled.
+  private static readonly SOURCE_ROLE_LABELS: Record<string, string> = {
+    input: 'Input',
+    start_frame: 'Start frame',
+    end_frame: 'End frame',
+    video_extension_source: 'Extended from',
+    concatenation_source: 'Concatenation input',
+    upscale_source: 'Upscaled from',
+    edit_source: 'Edited from',
+    video_reference: 'Reference video',
+    audio_reference: 'Reference audio',
+  };
+
+  sourceRoleLabel(role: string): string {
+    if (!role) {
+      return '';
+    }
+    return (
+      MediaDetailComponent.SOURCE_ROLE_LABELS[role] ||
+      role.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase())
+    );
   }
 
   private parsePrompt(): void {
@@ -477,6 +541,45 @@ export class MediaDetailComponent implements OnDestroy {
     };
 
     void this.router.navigate(['/video'], {state: {remixState}});
+  }
+
+  handleUpscaleClick(event: {
+    mediaItem: MediaItem;
+    selectedIndex: number;
+  }): void {
+    if (!this.mediaItem || !this.vpeScreening) {
+      return;
+    }
+
+    const workspaceId = this.workspaceStateService.getActiveWorkspaceId();
+    if (!workspaceId) {
+      handleErrorSnackbar(
+        this._snackBar,
+        {message: 'No active workspace.'},
+        'Start upscale',
+      );
+      return;
+    }
+
+    const dialogRef = this.dialog.open(VpeUpscaleDialogComponent, {
+      data: {
+        workspaceId,
+        mediaItemId: this.mediaItem.id,
+        mediaIndex: event.selectedIndex,
+        screening: this.vpeScreening,
+      },
+      width: '450px',
+    });
+
+    dialogRef.afterClosed().subscribe(result => {
+      if (result) {
+        handleInfoSnackbar(
+          this._snackBar,
+          'Upscale started. This can take several minutes - check back on ' +
+            'the gallery for the result.',
+        );
+      }
+    });
   }
 
   public openSourceAssetInLightbox(

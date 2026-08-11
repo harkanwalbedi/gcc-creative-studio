@@ -46,11 +46,14 @@
         [showOmniButton]="true"
         [showExtendButton]="true"
         [showConcatenateButton]="true"
+        [showUpscaleButton]="true"
+        [vpeScreening]="vpeScreening"
         (editClicked)="generateWithThisImage($event)"
         (generateVideoClicked)="generateVideoWithImage($event)"
         (sendToVtoClicked)="sendToVto($event)"
         (extendWithAiClicked)="handleExtendWithAi($event)"
         (concatenateClicked)="handleConcatenate($event)"
+        (upscaleClicked)="handleUpscaleClick($event)"
         (editWithOmniClicked)="handleEditWithOmni($event)"
         (deleteClicked)="deleteCurrentMedia()"
         (tagsChanged)="onTagsChanged($event)"
@@ -235,17 +238,22 @@
                     </ng-container>
                   </a>
                   <!-- From previously generated media -->
-                  <a *ngFor="let source of mediaItem.enrichedSourceMediaItems" [routerLink]="['/gallery', source.mediaItemId]"
-                    [queryParams]="{img_index: source.mediaIndex}" target="_blank" rel="noopener noreferrer"
-                    class="w-20 h-20 rounded-md overflow-hidden hover:opacity-80 transition-opacity cursor-pointer border border-gray-700 bg-neutral-800 flex items-center justify-center">
-                    <ng-container *ngIf="source.mimeType?.startsWith('audio/')">
-                      <mat-icon class="text-white !text-3xl !h-8 !w-8 flex items-center justify-center">graphic_eq</mat-icon>
-                    </ng-container>
-                    <ng-container *ngIf="!source.mimeType?.startsWith('audio/')">
-                      <img [src]="source?.presignedThumbnailUrl || source.presignedUrl" alt="Source Media Item"
-                        class="w-full h-full object-cover" />
-                    </ng-container>
-                  </a>
+                  <div *ngFor="let source of mediaItem.enrichedSourceMediaItems" class="flex flex-col items-center gap-1 w-20">
+                    <a [routerLink]="['/gallery', source.mediaItemId]"
+                      [queryParams]="{img_index: source.mediaIndex}" target="_blank" rel="noopener noreferrer"
+                      class="w-20 h-20 rounded-md overflow-hidden hover:opacity-80 transition-opacity cursor-pointer border border-gray-700 bg-neutral-800 flex items-center justify-center">
+                      <ng-container *ngIf="source.mimeType?.startsWith('audio/')">
+                        <mat-icon class="text-white !text-3xl !h-8 !w-8 flex items-center justify-center">graphic_eq</mat-icon>
+                      </ng-container>
+                      <ng-container *ngIf="!source.mimeType?.startsWith('audio/')">
+                        <img [src]="source?.presignedThumbnailUrl || source.presignedUrl" alt="Source Media Item"
+                          class="w-full h-full object-cover" />
+                      </ng-container>
+                    </a>
+                    <span *ngIf="sourceRoleLabel(source.role)" class="text-[10px] leading-tight text-gray-400 text-center truncate w-full">
+                      {{ sourceRoleLabel(source.role) }}
+                    </span>
+                  </div>
               </div>
               </section>
 

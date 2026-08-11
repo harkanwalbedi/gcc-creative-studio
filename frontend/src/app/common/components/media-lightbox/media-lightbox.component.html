@@ -253,6 +253,18 @@
         <mat-icon>add_to_photos</mat-icon>
         Concatenate
       </studio-button>
+
+      <studio-button
+        *ngIf="isVideo && showUpscaleButton"
+        variant="primary"
+        size="medium"
+        [disabled]="!hasStoredClip || !canUpscale"
+        (click)="onUpscaleClick()"
+        [matTooltip]="upscaleDisabledReason"
+      >
+        <mat-icon>hd</mat-icon>
+        Upscale
+      </studio-button>
     </div>
 
   </div>
