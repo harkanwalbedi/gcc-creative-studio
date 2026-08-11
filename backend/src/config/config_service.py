@@ -91,6 +91,12 @@ class ConfigService(BaseSettings):
     # Renders and logs the request payload instead of calling the API, so the
     # whole path can be walked without allowlist access.
     VPE_DRY_RUN: bool = False
+    # Size of VPE's own thread pool. Deliberately small: each worker is held
+    # for a full job (~315s measured for a 4K upscale), and a shot longer
+    # than the upscaler's 8 second window is split into two jobs, so a modest
+    # number here still represents a lot of queued minutes. Raising it buys
+    # throughput against the service's own capacity, not against the app.
+    VPE_MAX_CONCURRENT_JOBS: int = 3
 
     # --- VTO ---
     VTO_MODEL_ID: str = "virtual-try-on-001"

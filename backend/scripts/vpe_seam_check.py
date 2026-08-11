@@ -67,10 +67,11 @@ if str(_REPO_BACKEND) not in sys.path:
     sys.path.insert(0, str(_REPO_BACKEND))
 
 # pylint: disable=wrong-import-position
-from src.videos.vpe.capabilities import VpeCapabilityId
+from src.videos.vpe.capabilities import VpeCapabilityId, get_capability
 from src.videos.vpe.client import VpeClient
 from src.videos.vpe.payloads import VpeMediaRef, VpeRequest, build_payload
 from src.videos.vpe.preflight import probe_media
+from src.videos.vpe.segmentation import plan_segments
 
 # pylint: enable=wrong-import-position
 
@@ -131,10 +132,11 @@ def _ffmpeg(*args: str) -> None:
 def _plan_segments(frames: int, wanted: int) -> list[tuple[int, int]]:
     """Divides a frame count into upscalable pieces of similar length.
 
-    Even division matters more than hitting ``wanted`` exactly. Ten seconds
-    split at a flat 192 gives 192 + 48, and a 2 second tail is both outside
-    the 4 second minimum and a different enough chunk of time that its grain
-    would have every reason to differ. Balanced halves avoid that.
+    Delegates to the shared planner the service uses, so what this script
+    measures is what production will cut. The only thing kept here is the
+    refusal below: a clip already inside the window has no seam, so
+    measuring one is meaningless, whereas the service is quite right to
+    upscale it as a single segment.
 
     Args:
         frames: Total frames in the source.
@@ -144,7 +146,7 @@ def _plan_segments(frames: int, wanted: int) -> list[tuple[int, int]]:
         A list of (first_frame, length) pairs covering every frame.
 
     Raises:
-        ValueError: If no division into legal segments exists.
+        ValueError: If the clip needs no split, or none is possible.
     """
     if frames <= _MAX_SEGMENT_FRAMES:
         raise ValueError(
@@ -152,23 +154,9 @@ def _plan_segments(frames: int, wanted: int) -> list[tuple[int, int]]:
             f" ({_MIN_SEGMENT_FRAMES}-{_MAX_SEGMENT_FRAMES} frames);"
             " no split is needed and there is no seam to measure."
         )
-    count = max(2, -(-frames // wanted))
-    while count * _MAX_SEGMENT_FRAMES < frames:
-        count += 1
-    if frames < count * _MIN_SEGMENT_FRAMES:
-        raise ValueError(
-            f"{frames} frames cannot be divided into {count} segments of at"
-            f" least {_MIN_SEGMENT_FRAMES} frames each."
-        )
-
-    base, extra = divmod(frames, count)
-    plan: list[tuple[int, int]] = []
-    start = 0
-    for index in range(count):
-        length = base + (1 if index < extra else 0)
-        plan.append((start, length))
-        start += length
-    return plan
+    constraints = get_capability(VpeCapabilityId.UPSCALE).input_video
+    segments = plan_segments(frames, constraints, preferred_frames=wanted)
+    return [(segment.first_frame, segment.frames) for segment in segments]
 
 
 def _cut(source: Path, into: Path, first: int, frames: int, index: int) -> Path:
@@ -306,7 +294,9 @@ def _concat(segments: list[Segment], into: Path) -> Path:
     """
     listing = into / "concat.txt"
     listing.write_text(
-        "".join(f"file '{Path(item.upscaled).resolve()}'\n" for item in segments),
+        "".join(
+            f"file '{Path(item.upscaled).resolve()}'\n" for item in segments
+        ),
     )
     target = into / "rejoined.mp4"
     _ffmpeg(
