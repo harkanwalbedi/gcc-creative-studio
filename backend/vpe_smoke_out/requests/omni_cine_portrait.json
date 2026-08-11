@@ -1,0 +1,17 @@
+{
+  "instances": [
+    {
+      "prompt": "A calm wide shot. Keep everything else the same.",
+      "video": {
+        "gcsUri": "gs://vertex-test-project-383415-veo-exp/vpe-smoke/in/portrait_src.mp4",
+        "mimeType": "video/mp4"
+      }
+    }
+  ],
+  "parameters": {
+    "storageUri": "gs://vertex-test-project-383415-veo-exp/vpe-smoke/out/omni_cine_portrait/",
+    "experiments": {
+      "modelName": "omni-cine"
+    }
+  }
+}

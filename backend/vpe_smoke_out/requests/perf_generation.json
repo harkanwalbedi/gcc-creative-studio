@@ -1,0 +1,24 @@
+{
+  "instances": [
+    {
+      "prompt": "A cinematic character performing in a studio.",
+      "referenceImages": [
+        {
+          "image": {
+            "gcsUri": "gs://vertex-test-project-383415-veo-exp/vpe-smoke/in/still.png",
+            "mimeType": "image/png"
+          },
+          "referenceType": "ASSET"
+        }
+      ]
+    }
+  ],
+  "parameters": {
+    "storageUri": "gs://vertex-test-project-383415-veo-exp/vpe-smoke/out/perf_generation/",
+    "experiments": {
+      "modelName": "veo-exp-perf-generation",
+      "perfMeshGcsUri": "gs://vertex-test-project-383415-veo-exp/vpe-smoke/out/perf_estimation/7978453137173463391"
+    },
+    "seed": 78
+  }
+}

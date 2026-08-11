@@ -1,0 +1,19 @@
+{
+  "instances": [
+    {
+      "prompt": "Slow drifting clouds, seamless repeating pattern."
+    }
+  ],
+  "parameters": {
+    "storageUri": "gs://vertex-test-project-383415-veo-exp/vpe-smoke/out/video_textures/",
+    "experiments": {
+      "modelName": "veo-exp-video-textures",
+      "seamless": {
+        "loop": true,
+        "tessellateHorizontal": true,
+        "tessellateVertical": true
+      }
+    },
+    "seed": 42
+  }
+}

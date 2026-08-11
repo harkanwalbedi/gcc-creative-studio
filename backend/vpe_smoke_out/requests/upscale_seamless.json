@@ -1,0 +1,24 @@
+{
+  "instances": [
+    {
+      "video": {
+        "gcsUri": "gs://vertex-test-project-383415-veo-exp/vpe-smoke/out/video_textures/17730586316955787990",
+        "mimeType": "video/mp4"
+      }
+    }
+  ],
+  "parameters": {
+    "storageUri": "gs://vertex-test-project-383415-veo-exp/vpe-smoke/out/upscale_seamless/",
+    "experiments": {
+      "modelName": "veo3p1_upscale",
+      "seamless": {
+        "loop": true,
+        "tessellateHorizontal": true,
+        "tessellateVertical": true
+      }
+    },
+    "task": "upscale",
+    "resolution": "4k",
+    "aspectRatio": "16:9"
+  }
+}

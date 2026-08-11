@@ -1,0 +1,17 @@
+{
+  "instances": [
+    {
+      "video": {
+        "gcsUri": "gs://vertex-test-project-383415-veo-exp/vpe-smoke/in/perf_actor.mp4",
+        "mimeType": "video/mp4"
+      }
+    }
+  ],
+  "parameters": {
+    "storageUri": "gs://vertex-test-project-383415-veo-exp/vpe-smoke/out/perf_estimation/",
+    "experiments": {
+      "modelName": "veo-exp-perf-estimation"
+    },
+    "seed": 777
+  }
+}

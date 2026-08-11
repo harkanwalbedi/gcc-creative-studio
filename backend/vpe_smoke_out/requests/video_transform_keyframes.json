@@ -1,0 +1,27 @@
+{
+  "instances": [
+    {
+      "prompt": "A slow push in across a sunlit stone terrace.",
+      "image": {
+        "gcsUri": "gs://vertex-test-project-383415-veo-exp/vpe-smoke/in/still.png",
+        "mimeType": "image/png"
+      }
+    }
+  ],
+  "parameters": {
+    "storageUri": "gs://vertex-test-project-383415-veo-exp/vpe-smoke/out/video_transform_keyframes/",
+    "experiments": {
+      "modelName": "veo-exp-video-transform",
+      "conditioningFrames": [
+        {
+          "image": {
+            "gcsUri": "gs://vertex-test-project-383415-veo-exp/vpe-smoke/in/still.png",
+            "mimeType": "image/png"
+          },
+          "frameNum": 24
+        }
+      ]
+    },
+    "seed": 777
+  }
+}

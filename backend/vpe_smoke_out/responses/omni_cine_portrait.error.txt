@@ -1,0 +1,1 @@
+VpeInputRejectedError: Input video must be exactly 1280x720, but got 720x1280. Resize the input to match the model resolution before submitting. Check the input media against the capability's documented frame rate, frame count and frame size before resubmitting.

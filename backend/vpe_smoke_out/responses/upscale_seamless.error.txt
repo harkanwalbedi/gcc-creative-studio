@@ -1,0 +1,1 @@
+VpeInputRejectedError: Seamless tiling is only supported when the `compressionQuality` parameter is set to `lossless_16bit_png`, or when using ProRes or DNxHR codecs. Check the input media against the capability's documented frame rate, frame count and frame size before resubmitting.

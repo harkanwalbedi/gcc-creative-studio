@@ -1,2 +1,13 @@
 case,model,status,detail,seconds,output
-upscale,upscale,SUCCESS,,276.4,gs://vertex-test-project-383415-veo-exp/vpe-smoke/out/upscale/8396334043780905355
+upscale,upscale,SUCCESS,,314.6,gs://vertex-test-project-383415-veo-exp/vpe-smoke/out/upscale/8757758039882982880
+upscale_portrait,upscale,SUCCESS,,313.8,gs://vertex-test-project-383415-veo-exp/vpe-smoke/out/upscale_portrait/16792709958407674394
+omni_cine,omni_cine,SUCCESS,,193.3,gs://vertex-test-project-383415-veo-exp/vpe-smoke/out/omni_cine/17788624132368847804
+omni_cine_portrait,omni_cine,FAILED,"VpeInputRejectedError: Input video must be exactly 1280x720, but got 720x1280. Resize the input to match the model resolution before submitting. Check the input media against the capability's documented frame rate, frame count and frame size before resubmitting.",10.4,
+video_transform,video_transform,FAILED,VpeMissingOutputError: VPE operation projects/vertex-test-project-383415/locations/us-central1/publishers/google/models/veo-experimental/operations/a50569a4-e02d-465f-ba30-522e9584b0f8 completed without naming an output file. Check the storageUri folder directly; the documented 4K 16-bit PNG defect drops the output path.,133.3,
+video_transform_masked,video_transform,FAILED,VpeMissingOutputError: VPE operation projects/vertex-test-project-383415/locations/us-central1/publishers/google/models/veo-experimental/operations/1c00221e-85f1-4db1-8672-af83303191de completed without naming an output file. Check the storageUri folder directly; the documented 4K 16-bit PNG defect drops the output path.,193.3,
+video_transform_keyframes,video_transform,SUCCESS,,193.3,gs://vertex-test-project-383415-veo-exp/vpe-smoke/out/video_transform_keyframes/2105270833562523800
+perf_estimation,perf_estimation,SUCCESS,,82.2,gs://vertex-test-project-383415-veo-exp/vpe-smoke/out/perf_estimation/7978453137173463391
+perf_generation,perf_generation,FAILED,VpeApiError: No such object: vertex-test-project-383415-veo-exp/vpe-smoke/out/perf_estimation/7978453137173463391,10.4,
+dialogue_driven,dialogue_driven,SUCCESS,,253.4,gs://vertex-test-project-383415-veo-exp/vpe-smoke/out/dialogue_driven/7279777530785673764
+video_textures,video_textures,SUCCESS,,253.5,gs://vertex-test-project-383415-veo-exp/vpe-smoke/out/video_textures/17730586316955787990
+upscale_seamless,upscale_seamless,FAILED,"VpeInputRejectedError: Seamless tiling is only supported when the `compressionQuality` parameter is set to `lossless_16bit_png`, or when using ProRes or DNxHR codecs. Check the input media against the capability's documented frame rate, frame count and frame size before resubmitting.",10.4,

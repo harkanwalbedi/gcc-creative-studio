@@ -1,12 +1,12 @@
 {
-  "name": "projects/vertex-test-project-383415/locations/us-central1/publishers/google/models/veo-experimental/operations/ee0c51a1-0753-4ce8-ab83-321a8933a73a",
+  "name": "projects/vertex-test-project-383415/locations/us-central1/publishers/google/models/veo-experimental/operations/6503b406-a87a-4855-998e-40f5107c7957",
   "done": true,
   "response": {
     "@type": "type.googleapis.com/cloud.ai.large_models.vision.GenerateVideoResponse",
     "raiMediaFilteredCount": 0,
     "videos": [
       {
-        "gcsUri": "gs://vertex-test-project-383415-veo-exp/vpe-smoke/out/upscale/8396334043780905355/sample_0.mp4",
+        "gcsUri": "gs://vertex-test-project-383415-veo-exp/vpe-smoke/out/upscale/8757758039882982880/sample_0.mp4",
         "mimeType": "video/mp4"
       }
     ]

@@ -1,0 +1,25 @@
+{
+  "instances": [
+    {
+      "prompt": "A person speaking to camera, static camera.",
+      "image": {
+        "gcsUri": "gs://vertex-test-project-383415-veo-exp/vpe-smoke/in/still.png",
+        "mimeType": "image/png"
+      },
+      "referenceAudios": [
+        {
+          "audio": {
+            "gcsUri": "gs://vertex-test-project-383415-veo-exp/vpe-smoke/in/voice.wav",
+            "mimeType": "audio/wav"
+          }
+        }
+      ]
+    }
+  ],
+  "parameters": {
+    "storageUri": "gs://vertex-test-project-383415-veo-exp/vpe-smoke/out/dialogue_driven/",
+    "experiments": {
+      "modelName": "veo-exp-a2v-generation"
+    }
+  }
+}

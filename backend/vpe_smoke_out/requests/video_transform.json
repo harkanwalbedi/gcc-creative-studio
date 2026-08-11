@@ -1,0 +1,20 @@
+{
+  "instances": [
+    {
+      "prompt": "A cinematic tracking shot across a sunlit stone terrace.",
+      "video": {
+        "gcsUri": "gs://vertex-test-project-383415-veo-exp/vpe-smoke/in/transform_src.mp4",
+        "mimeType": "video/mp4"
+      }
+    }
+  ],
+  "parameters": {
+    "storageUri": "gs://vertex-test-project-383415-veo-exp/vpe-smoke/out/video_transform/",
+    "experiments": {
+      "modelName": "veo-exp-video-transform",
+      "videoTransformStrength": 0.6,
+      "numDiffusionSteps": 20
+    },
+    "seed": 777
+  }
+}
