@@ -87,6 +87,9 @@ class AssetRoleEnum(str, Enum):
     # VIDEO_EXTENSION_SOURCE, which appends new footage, and from
     # VIDEO_REFERENCE, which only guides a fresh generation.
     EDIT_SOURCE = "edit_source"
+    # The clip an upscale was made from. Every frame of the result comes from
+    # it, so the link is the only record of where a 4K master originated.
+    UPSCALE_SOURCE = "upscale_source"
 
 
 class SourceAssetLink(BaseModel):

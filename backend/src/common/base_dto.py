@@ -13,7 +13,6 @@
 # limitations under the License.
 """Base Data Transfer Object classes."""
 
-
 from enum import Enum
 
 from pydantic import BaseModel, ConfigDict
@@ -59,6 +58,11 @@ class GenerationModelEnum(str, Enum):
 
     # Video-Specific Models
     GEMINI_OMNI_FLASH_PREVIEW = "gemini-omni-flash-preview"
+    # A VPE checkpoint, not a publisher model. Every VPE capability is reached
+    # through the one "veo-experimental" endpoint and chosen by this name
+    # inside the payload, so the checkpoint is what identifies the model that
+    # actually produced a row; "veo-experimental" would name eight of them.
+    VEO_3_1_UPSCALE = "veo3p1_upscale"
     VEO_3_1_FAST_GENERATE_001 = "veo-3.1-fast-generate-001"
     VEO_3_1_LITE_GENERATE_001 = "veo-3.1-lite-generate-001"
     VEO_3_1_GENERATE_001 = "veo-3.1-generate-001"
