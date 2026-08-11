@@ -221,6 +221,51 @@ class VpeMissingOperationError(VpeError):
         self.body = body
 
 
+class VpeContentFilteredError(VpeError):
+    """The job ran to completion and its output was withheld.
+
+    Distinct from an operation that merely names no file: nothing was
+    written, so no amount of looking in the output folder will find
+    anything, and resubmitting the same request unchanged will not help.
+    The prompt or the input has to change.
+
+    Seen live on both video-transform variants against a synthetic
+    test-card input. A structure-preserving restyle of a canonical image
+    reproduces it closely enough to read as recitation, which is worth
+    knowing before concluding the request was malformed.
+    """
+
+    def __init__(
+        self,
+        operation_name: str,
+        raw: Mapping[str, Any],
+        *,
+        filtered_count: int,
+        reasons: tuple[str, ...] = (),
+    ) -> None:
+        """Initialises the error.
+
+        Args:
+            operation_name: The operation whose output was withheld.
+            raw: The full operation body, kept for the log.
+            filtered_count: How many outputs the filter removed.
+            reasons: Whatever the response gave as a reason, if anything.
+        """
+        joined = ", ".join(reasons)
+        detail = f": {joined}" if reasons else ""
+        super().__init__(
+            f"VPE filtered every output of operation {operation_name}"
+            f" ({filtered_count} filtered){detail}. The job ran, so this is"
+            " not a malformed request - the prompt or the input has to"
+            " change. A structure-preserving edit of a highly recognisable"
+            " source can trip a recitation check on its own.",
+        )
+        self.operation_name = operation_name
+        self.filtered_count = filtered_count
+        self.reasons = reasons
+        self.raw = raw
+
+
 class VpeMissingOutputError(VpeError):
     """A completed operation carried no output URI.
 
@@ -230,17 +275,28 @@ class VpeMissingOutputError(VpeError):
     ``src.common.storage_service.GcsService`` does not expose today.
     """
 
-    def __init__(self, operation_name: str, raw: Mapping[str, Any]) -> None:
+    def __init__(
+        self,
+        operation_name: str,
+        raw: Mapping[str, Any],
+        *,
+        hint: str = "",
+    ) -> None:
         """Initialises the error.
 
         Args:
             operation_name: The operation that finished without an output.
             raw: The full operation body, kept for the log.
+            hint: A cause worth naming, where one is actually plausible.
+                Empty otherwise. The 4K 16-bit PNG defect used to be offered
+                unconditionally, which sent the first live investigation of
+                a filtered video-transform job hunting an upscaler defect
+                that could not possibly apply to it.
         """
+        suffix = f" {hint}" if hint else ""
         super().__init__(
             f"VPE operation {operation_name} completed without naming an"
-            " output file. Check the storageUri folder directly; the"
-            " documented 4K 16-bit PNG defect drops the output path.",
+            f" output file. Check the storageUri folder directly.{suffix}",
         )
         self.operation_name = operation_name
         self.raw = raw

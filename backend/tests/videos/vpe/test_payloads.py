@@ -833,6 +833,10 @@ MINIMAL_REQUESTS: dict[VpeCapabilityId, VpeRequest] = {
         capability_id=VpeCapabilityId.UPSCALE_SEAMLESS,
         storage_uri=OUTPUT_DIR,
         video=MP4,
+        # Not decoration: seamless output is refused live unless the
+        # delivery format can carry it, so a request without this is not
+        # minimal, it is invalid.
+        compression_quality="lossless_16bit_png",
     ),
     VpeCapabilityId.OMNI_CINE: VpeRequest(
         capability_id=VpeCapabilityId.OMNI_CINE,
@@ -1362,6 +1366,51 @@ def test_h264_is_allowed_at_any_upscale_resolution():
     )
 
     assert lookup(payload, "parameters.experiments.codec") == "h264"
+
+
+def test_seamless_needs_a_delivery_format_that_can_carry_it():
+    """Refused live unless the output format supports tiling.
+
+    "Seamless tiling is only supported when the compressionQuality
+    parameter is set to lossless_16bit_png, or when using ProRes or DNxHR
+    codecs." No prose documents this; only a live rejection revealed it.
+    """
+    with pytest.raises(VpePayloadError, match="seamless output needs"):
+        build_payload(
+            VpeRequest(
+                capability_id=VpeCapabilityId.UPSCALE_SEAMLESS,
+                storage_uri=OUTPUT_DIR,
+                video=MP4,
+                seamless=VpeSeamlessFlags(loop=True),
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("quality", "codec"),
+    [
+        ("lossless_16bit_png", None),
+        (None, "prores"),
+        (None, "dnxhr"),
+    ],
+)
+def test_seamless_accepts_each_documented_carrier(
+    quality: str | None,
+    codec: str | None,
+):
+    """Each of the three the rejection names is sufficient on its own."""
+    payload = build_payload(
+        VpeRequest(
+            capability_id=VpeCapabilityId.UPSCALE_SEAMLESS,
+            storage_uri=OUTPUT_DIR,
+            video=MP4,
+            compression_quality=quality,
+            codec=codec,
+            seamless=VpeSeamlessFlags(loop=True),
+        ),
+    )
+
+    assert payload["parameters"]["experiments"]["seamless"]["loop"] is True
 
 
 def test_registry_enums_may_be_passed_instead_of_strings():

@@ -389,6 +389,10 @@ def _cases() -> list[Case]:
             ),
             resolution="4k",
             aspect_ratio="16:9",
+            # Required, though no doc says so. Live: "Seamless tiling is only
+            # supported when the compressionQuality parameter is set to
+            # lossless_16bit_png, or when using ProRes or DNxHR codecs."
+            compression_quality="lossless_16bit_png",
             seamless=VpeSeamlessFlags(
                 loop=True,
                 tessellate_horizontal=True,
@@ -896,7 +900,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             uri = _result_uri(result)
             if case.feeds:
                 with lock:
-                    uris[case.feeds] = uri
+                    uris[case.feeds] = _result_file_uri(result)
             log.append(f"    SUCCESS in {elapsed}s -> {uri}")
             (report / "responses" / f"{case.key}.json").write_text(
                 json.dumps(_jsonable(result), indent=2, default=str)
@@ -918,6 +922,14 @@ def cmd_run(args: argparse.Namespace) -> int:
             (report / "responses" / f"{case.key}.error.txt").write_text(
                 f"{type(exc).__name__}: {exc}"
             )
+            # The body, not only the exception text. The first live run lost
+            # the filter's own reason this way, leaving nothing to diagnose
+            # a rejection with beyond our own paraphrase of it.
+            raw = getattr(exc, "raw", None)
+            if raw is not None:
+                (report / "responses" / f"{case.key}.raw.json").write_text(
+                    json.dumps(raw, indent=2, default=str)
+                )
             record(
                 {
                     "case": case.key,
@@ -955,12 +967,26 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def _result_uri(result: Any) -> str:
-    """Best-effort extraction of the output location."""
+    """Returns the output directory, for reporting."""
     for attr in ("output_directory_uri", "directory_uri"):
         value = getattr(result, attr, None)
         if value:
             return str(value)
     return str(getattr(result, "raw", "") or "")[:200]
+
+
+def _result_file_uri(result: Any) -> str:
+    """Returns the produced FILE, which is what a chained case consumes.
+
+    Not the directory. Performance generation takes a perfMeshGcsUri and
+    the seamless upscaler takes a video, and both want the object itself;
+    handing either the folder fails with "No such object", which is what
+    happened on the first full live run.
+    """
+    video = getattr(result, "primary_video", None)
+    if video is not None and getattr(video, "gcs_uri", ""):
+        return str(video.gcs_uri)
+    return _result_uri(result)
 
 
 def _jsonable(value: Any) -> Any:

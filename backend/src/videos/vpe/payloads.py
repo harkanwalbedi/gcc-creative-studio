@@ -839,6 +839,40 @@ def _build_upscale(
     return _finish(instance, parameters)
 
 
+def _check_seamless_delivery(request: VpeRequest) -> None:
+    """Rejects a seamless upscale that no delivery format can carry.
+
+    Stated nowhere, and found only by running it. The service answers:
+    "Seamless tiling is only supported when the `compressionQuality`
+    parameter is set to `lossless_16bit_png`, or when using ProRes or DNxHR
+    codecs." No prose in the tessellation or upscaler pages mentions the
+    rule; the tessellation sample happens to satisfy it by sending
+    lossless_16bit_png, so copying that sample works and varying from it
+    fails with nothing to warn you.
+
+    Checked here rather than left to the API because the rejection costs a
+    round trip and reads as a payload defect.
+
+    Args:
+        request: The caller's request.
+
+    Raises:
+        VpePayloadError: If neither condition is met.
+    """
+    quality = _enum_value(request.compression_quality)
+    codec = _enum_value(request.codec)
+    if quality == VpeCompressionQuality.LOSSLESS_16BIT_PNG.value:
+        return
+    if codec in (VpeCodec.PRORES.value, VpeCodec.DNXHR.value):
+        return
+    raise VpePayloadError(
+        "seamless output needs compressionQuality"
+        f" {VpeCompressionQuality.LOSSLESS_16BIT_PNG.value}, or codec"
+        f" {VpeCodec.PRORES.value} or {VpeCodec.DNXHR.value}; got"
+        f" compressionQuality={quality!r} codec={codec!r}",
+    )
+
+
 def _build_upscale_seamless(
     capability: VpeCapability,
     request: VpeRequest,
@@ -855,7 +889,12 @@ def _build_upscale_seamless(
 
     Returns:
         The request body.
+
+    Raises:
+        VpePayloadError: If seamless output was asked for in a delivery
+            format that cannot carry it.
     """
+    _check_seamless_delivery(request)
     payload = _build_upscale(capability, request)
     payload["parameters"]["experiments"]["seamless"] = _seamless(request)
     return payload

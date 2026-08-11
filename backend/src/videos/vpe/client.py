@@ -64,6 +64,7 @@ from src.videos.vpe.capabilities import (
 from src.videos.vpe.errors import (
     PreflightSnapshot,
     VpeConfigurationError,
+    VpeContentFilteredError,
     VpeInvalidPayloadError,
     VpeMissingOperationError,
     VpeMissingOutputError,
@@ -304,10 +305,8 @@ def parse_result(
                         mime_type=str(entry.get("mimeType") or ""),
                     ),
                 )
-    if not videos:
-        raise VpeMissingOutputError(operation.name, operation.raw)
-
     filtered = 0
+    reasons: tuple[str, ...] = ()
     if isinstance(response, Mapping):
         raw_filtered = response.get("raiMediaFilteredCount")
         if isinstance(raw_filtered, (int, str)):
@@ -315,6 +314,24 @@ def parse_result(
                 filtered = int(raw_filtered)
             except ValueError:
                 filtered = 0
+        raw_reasons = response.get("raiMediaFilteredReasons")
+        if isinstance(raw_reasons, (list, tuple)):
+            reasons = tuple(str(reason) for reason in raw_reasons)
+        elif isinstance(raw_reasons, str):
+            reasons = (raw_reasons,)
+
+    # Order matters: a filtered job also names no video, so checking for a
+    # missing output first reports every filtered job as a missing file and
+    # sends the reader hunting a storage problem that does not exist.
+    if not videos and filtered:
+        raise VpeContentFilteredError(
+            operation.name,
+            operation.raw,
+            filtered_count=filtered,
+            reasons=reasons,
+        )
+    if not videos:
+        raise VpeMissingOutputError(operation.name, operation.raw)
 
     return VpeResult(
         operation_name=operation.name,

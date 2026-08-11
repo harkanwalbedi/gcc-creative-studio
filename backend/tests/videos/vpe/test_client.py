@@ -49,6 +49,7 @@ from src.videos.vpe.errors import (
     VpeAuthenticationError,
     VpeBucketPermissionError,
     VpeConfigurationError,
+    VpeContentFilteredError,
     VpeFrameRateError,
     VpeInputRejectedError,
     VpeInvalidPayloadError,
@@ -1037,6 +1038,83 @@ async def test_dry_run_walks_submit_then_wait_end_to_end(fake_time):
 
     assert result.primary_video.gcs_uri.endswith("/sample_0.mp4")
     assert fake_time.sleeps == [client_module.INITIAL_POLL_SECONDS]
+
+
+# --- Content filtering ------------------------------------------------------
+#
+# Both video-transform variants came back this way on the first live run:
+# done, no error, no videos, and a non-zero filtered count. The client called
+# that a missing output file and blamed a documented upscaler defect that
+# could not apply, which sent the investigation the wrong way entirely.
+
+FILTERED_BODY = {
+    "name": DOC_A2V_OPERATION_NAME,
+    "done": True,
+    "response": {
+        "@type": (
+            "type.googleapis.com/cloud.ai.large_models.vision"
+            ".GenerateVideoResponse"
+        ),
+        "raiMediaFilteredCount": 1,
+        "raiMediaFilteredReasons": ["Recitation check failed."],
+        "videos": [],
+    },
+}
+
+EMPTY_BODY = {
+    "name": DOC_A2V_OPERATION_NAME,
+    "done": True,
+    "response": {
+        "@type": (
+            "type.googleapis.com/cloud.ai.large_models.vision"
+            ".GenerateVideoResponse"
+        ),
+        "raiMediaFilteredCount": 0,
+        "videos": [],
+    },
+}
+
+
+def test_a_filtered_result_says_it_was_filtered():
+    """A withheld output is not a missing file, and must not read as one."""
+    operation = VpeOperation.from_body(FILTERED_BODY)
+
+    with pytest.raises(VpeContentFilteredError) as caught:
+        parse_result(operation)
+
+    assert caught.value.filtered_count == 1
+    assert caught.value.reasons == ("Recitation check failed.",)
+    assert "Recitation check failed." in str(caught.value)
+
+
+def test_a_filtered_result_does_not_blame_a_storage_problem():
+    """Nothing was written, so pointing at the output folder misleads."""
+    operation = VpeOperation.from_body(FILTERED_BODY)
+
+    with pytest.raises(VpeContentFilteredError) as caught:
+        parse_result(operation)
+
+    message = str(caught.value)
+    assert "storageUri" not in message
+    assert "16-bit PNG" not in message
+
+
+def test_an_unfiltered_empty_result_is_still_a_missing_output():
+    """Zero filtered and zero videos is the other defect, not this one."""
+    operation = VpeOperation.from_body(EMPTY_BODY)
+
+    with pytest.raises(VpeMissingOutputError):
+        parse_result(operation)
+
+
+def test_missing_output_no_longer_asserts_an_unrelated_cause():
+    """The 4K PNG defect is an upscaler problem; do not offer it blindly."""
+    operation = VpeOperation.from_body(EMPTY_BODY)
+
+    with pytest.raises(VpeMissingOutputError) as caught:
+        parse_result(operation)
+
+    assert "16-bit PNG" not in str(caught.value)
 
 
 # --- The blocking caller's path --------------------------------------------
