@@ -145,4 +145,7 @@ cython_debug/
 vpe_smoke_out/fixtures/
 seam_report/*.mp4
 seam_report/segments/
+media_ops_report/*.mp4
+media_ops_report/*.png
+media_ops_report/segments/
 

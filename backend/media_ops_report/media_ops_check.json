@@ -1,0 +1,118 @@
+{
+  "source": "bootstrap/assets/media-template/cymbal-suv-adventure-local.mp4",
+  "source_frames": 192,
+  "source_fps": "24",
+  "source_has_audio": true,
+  "plan": "halved by this script: the clip fits the upscaler whole, so the service would not split it, but a single segment would leave the join untested",
+  "segments": [
+    {
+      "index": 0,
+      "first_frame": 0,
+      "frames": 96
+    },
+    {
+      "index": 1,
+      "first_frame": 96,
+      "frames": 96
+    }
+  ],
+  "master": "media_ops_report/master.mp4",
+  "checks": [
+    {
+      "name": "segment 0 holds exactly 96 frames",
+      "status": "PASS",
+      "detail": "measured 96"
+    },
+    {
+      "name": "segment 0 keeps the source rate",
+      "status": "PASS",
+      "detail": "24 against the source's 24"
+    },
+    {
+      "name": "segment 0 keeps the source frame size",
+      "status": "PASS",
+      "detail": "1280x720 against the source's 1280x720"
+    },
+    {
+      "name": "segment 0 carries no audio",
+      "status": "PASS",
+      "detail": "silent, as the API is meant to receive it"
+    },
+    {
+      "name": "segment 0 starts on source frame",
+      "status": "PASS",
+      "detail": "frame 0 at 50.8 dB, better than its neighbours (+0: 50.8 dB, +1: 43.8 dB)"
+    },
+    {
+      "name": "segment 1 holds exactly 96 frames",
+      "status": "PASS",
+      "detail": "measured 96"
+    },
+    {
+      "name": "segment 1 keeps the source rate",
+      "status": "PASS",
+      "detail": "24 against the source's 24"
+    },
+    {
+      "name": "segment 1 keeps the source frame size",
+      "status": "PASS",
+      "detail": "1280x720 against the source's 1280x720"
+    },
+    {
+      "name": "segment 1 carries no audio",
+      "status": "PASS",
+      "detail": "silent, as the API is meant to receive it"
+    },
+    {
+      "name": "segment 1 starts on source frame",
+      "status": "PASS",
+      "detail": "frame 96 at 45.1 dB, better than its neighbours (-1: 21.4 dB, +0: 45.1 dB, +1: 21.5 dB)"
+    },
+    {
+      "name": "the segments cover the whole source",
+      "status": "PASS",
+      "detail": "192 frames planned across 2 segments against 192 in the source"
+    },
+    {
+      "name": "the join returns every frame of the source",
+      "status": "PASS",
+      "detail": "192 frames against the source's 192"
+    },
+    {
+      "name": "the join keeps the source rate",
+      "status": "PASS",
+      "detail": "24 against the source's 24"
+    },
+    {
+      "name": "the join keeps the source frame size",
+      "status": "PASS",
+      "detail": "1280x720 against the source's 1280x720"
+    },
+    {
+      "name": "the joined clip runs for as long as its frames say",
+      "status": "PASS",
+      "detail": "container reports 8.000s against 8.000s of frames, inside one frame (0.042s)"
+    },
+    {
+      "name": "the master carries an audio track",
+      "status": "PASS",
+      "detail": "restored into master.mp4"
+    },
+    {
+      "name": "restoring audio changed no frames",
+      "status": "PASS",
+      "detail": "192 frames against the joined clip's 192"
+    },
+    {
+      "name": "the master's picture is the joined picture, byte for byte",
+      "status": "PASS",
+      "detail": "video packets hash to d150f1dfbcdb... in both, so the audio step stream-copied rather than re-encoded"
+    },
+    {
+      "name": "the track ends with the picture",
+      "status": "PASS",
+      "detail": "audio 8.000s against picture 8.000s, inside one frame (0.042s)"
+    }
+  ],
+  "failed": 0
+}

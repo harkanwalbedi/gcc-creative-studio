@@ -241,10 +241,10 @@ def restore_audio(
         "aac",
         "-b:a",
         "192k",
-        # The audio track can outrun the video by a few milliseconds - a
-        # nominally 10s clip often carries 10.005s of AAC - and without this
-        # the container would report the longer of the two, leaving the
-        # master a frame longer than the picture it holds.
+        # Pad audio if shorter so -shortest never truncates the video master,
+        # while still cutting audio if it outruns the video track.
+        "-af",
+        "apad",
         "-shortest",
         str(target),
     )
