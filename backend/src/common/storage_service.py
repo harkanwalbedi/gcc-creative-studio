@@ -125,6 +125,41 @@ class GcsService:
             logger.error("Failed to stream from '%s': %s", gcs_uri, e)
             raise e
 
+    def list_uris_by_prefix(
+        self,
+        prefix: str,
+        bucket_name: str | None = None,
+    ) -> list[str]:
+        """Lists the URIs of every blob stored under a prefix.
+
+        Args:
+            prefix: The blob name prefix to match. Do not append the bucket
+            name, just the folder path. Ex: '17025013387606323175/'
+
+            bucket_name: The bucket to list, defaulting to the service's own.
+
+        Returns:
+            The full gs:// URIs of the matching blobs, empty on failure.
+
+        """
+        actual_bucket_name = bucket_name if bucket_name else self.bucket_name
+        try:
+            blobs = self.client.list_blobs(actual_bucket_name, prefix=prefix)
+            # list_blobs pages lazily, so the request - and any error it
+            # raises - only happens while the iterator is being consumed.
+            return [f"gs://{actual_bucket_name}/{blob.name}" for blob in blobs]
+        except exceptions.NotFound:
+            logger.error("Bucket '%s' not found.", actual_bucket_name)
+            return []
+        except exceptions.GoogleAPICallError as e:
+            logger.error(
+                "Failed to list blobs under '%s' in bucket '%s': %s",
+                prefix,
+                actual_bucket_name,
+                e,
+            )
+            return []
+
     def upload_file_to_gcs(
         self,
         local_path: str,

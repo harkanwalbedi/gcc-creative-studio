@@ -257,3 +257,57 @@ def test_store_to_gcs_decode_success(gcs_service):
 def test_store_to_gcs_invalid_type(gcs_service):
     res = gcs_service.store_to_gcs("folder", "file.txt", "text/plain", 123)
     assert res == ""
+
+
+def test_list_uris_by_prefix_success(gcs_service):
+    blobs = [MagicMock(), MagicMock()]
+    blobs[0].name = "folder/sample_0.mp4"
+    blobs[1].name = "folder/sample_1.mp4"
+    gcs_service.client.list_blobs.return_value = iter(blobs)
+
+    res = gcs_service.list_uris_by_prefix("folder/")
+
+    assert res == [
+        "gs://test-bucket/folder/sample_0.mp4",
+        "gs://test-bucket/folder/sample_1.mp4",
+    ]
+    gcs_service.client.list_blobs.assert_called_once_with(
+        "test-bucket",
+        prefix="folder/",
+    )
+
+
+def test_list_uris_by_prefix_other_bucket(gcs_service):
+    blob = MagicMock()
+    blob.name = "folder/file.txt"
+    gcs_service.client.list_blobs.return_value = iter([blob])
+
+    res = gcs_service.list_uris_by_prefix("folder/", "another-bucket")
+
+    assert res == ["gs://another-bucket/folder/file.txt"]
+    gcs_service.client.list_blobs.assert_called_once_with(
+        "another-bucket",
+        prefix="folder/",
+    )
+
+
+def test_list_uris_by_prefix_not_found(gcs_service):
+    gcs_service.client.list_blobs.side_effect = exceptions.NotFound("No bucket")
+
+    res = gcs_service.list_uris_by_prefix("folder/")
+
+    assert res == []
+
+
+def test_list_uris_by_prefix_api_error_while_paging(gcs_service):
+    def paginate():
+        blob = MagicMock()
+        blob.name = "folder/file.txt"
+        yield blob
+        raise exceptions.GoogleAPICallError("Boom")
+
+    gcs_service.client.list_blobs.return_value = paginate()
+
+    res = gcs_service.list_uris_by_prefix("folder/")
+
+    assert res == []

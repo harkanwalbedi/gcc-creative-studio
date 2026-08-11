@@ -291,7 +291,14 @@ export class GalleryService implements OnDestroy {
         item.languageCode || metadata.languageCode || metadata.language_code,
       seed: item.seed || metadata.seed,
       numMedia: item.numMedia || metadata.numMedia || metadata.num_media,
-      duration: item.duration || metadata.duration,
+      // The backend column is duration_seconds, which every response serialises
+      // under its camelCase alias; the bare `duration` only ever comes from the
+      // older source-asset shapes. `??` so a genuine 0 is not discarded.
+      duration:
+        item.durationSeconds ??
+        item.duration ??
+        metadata.durationSeconds ??
+        metadata.duration,
       resolution: item.resolution || metadata.resolution,
       googleSearch:
         item.googleSearch ?? metadata.googleSearch ?? metadata.google_search,

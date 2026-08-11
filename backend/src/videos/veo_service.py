@@ -29,6 +29,7 @@ import base64
 
 from src.auth.iam_signer_credentials_service import IamSignerCredentials
 from src.common.base_dto import (
+    AspectRatioEnum,
     GenerationModelEnum,
     MimeTypeEnum,
     ReferenceImageTypeEnum,
@@ -36,6 +37,7 @@ from src.common.base_dto import (
 from src.common.media_utils import (
     concatenate_videos,
     generate_thumbnail,
+    get_video_metadata,
     strip_audio,
 )
 from src.common.schema.genai_model_setup import GenAIModelSetup
@@ -65,6 +67,150 @@ VIDEO_RESOLUTION_MAP = {
     "2K": "1080p",
     "4K": "4k",
 }
+
+# Ceilings on the long edge for each name in VIDEO_RESOLUTION_MAP, used to name
+# a frame size that was measured rather than requested. The long edge is what
+# the names refer to: a 720x1280 portrait clip is the same 1K as its 1280x720
+# landscape counterpart. Anything larger is 4K.
+MEASURED_RESOLUTION_BY_LONG_EDGE = ((1280, "1K"), (1920, "2K"))
+
+# How far a measured ratio may sit from a named one and still be called by that
+# name. Encoders round frame sizes up to whole macroblocks - 1920x1088 rather
+# than 1920x1080 - which shifts the ratio by well under a percent.
+ASPECT_RATIO_TOLERANCE = 0.02
+
+# A Veo operation is polled until it reports done, and nothing says it ever
+# will. Background jobs of every kind share one four-thread executor, so a poll
+# loop with no ceiling eventually takes the whole pool with it, and the row it
+# belongs to sits in `processing` for good.
+VEO_POLL_TIMEOUT_SECONDS = 1800.0
+
+
+def resolve_measured_resolution(width: int, height: int) -> str:
+    """Names a measured frame size in the vocabulary the request uses.
+
+    Args:
+        width: Measured frame width in pixels.
+        height: Measured frame height in pixels.
+
+    Returns:
+        One of the resolution names a request can ask for ("1K", "2K", "4K").
+
+    """
+    long_edge = max(width, height)
+    for ceiling, name in MEASURED_RESOLUTION_BY_LONG_EDGE:
+        if long_edge <= ceiling:
+            return name
+    return "4K"
+
+
+def resolve_measured_aspect_ratio(
+    width: int,
+    height: int,
+) -> AspectRatioEnum | None:
+    """Names a measured frame size as one of the supported aspect ratios.
+
+    Args:
+        width: Measured frame width in pixels.
+        height: Measured frame height in pixels.
+
+    Returns:
+        The closest supported ratio, or None when the frame resembles none of
+        them - the caller then keeps the ratio the row already holds, which is
+        of more use to a reader than OTHER.
+
+    """
+    if width <= 0 or height <= 0:
+        return None
+
+    measured = width / height
+    closest: AspectRatioEnum | None = None
+    smallest_error = ASPECT_RATIO_TOLERANCE
+    for candidate in AspectRatioEnum:
+        parts = candidate.value.split(":")
+        if len(parts) != 2:
+            continue
+        ratio = int(parts[0]) / int(parts[1])
+        error = abs(measured - ratio) / ratio
+        if error < smallest_error:
+            closest = candidate
+            smallest_error = error
+    return closest
+
+
+def build_measured_metadata(video_path: str) -> dict:
+    """Describes a delivered clip from the file itself.
+
+    The row is otherwise a copy of the request, which the output need not
+    match: an extension is asked for 7 seconds whatever the form said, an edit
+    inherits the length and dimensions of the clip it modifies, and Omni is
+    never told a resolution at all.
+
+    Blocking: call from a worker thread.
+
+    Args:
+        video_path: Path to a local copy of the delivered clip.
+
+    Returns:
+        The subset of "duration_seconds", "aspect_ratio" and "resolution" that
+        could be measured, ready to merge into an update. Empty when the file
+        cannot be probed, so nothing overwrites the request values with
+        guesses.
+
+    """
+    probed = get_video_metadata(video_path)
+    if not probed:
+        return {}
+
+    measured: dict = {}
+    duration_seconds = probed.get("duration_seconds")
+    if duration_seconds:
+        measured["duration_seconds"] = duration_seconds
+
+    width = probed.get("width") or 0
+    height = probed.get("height") or 0
+    if width > 0 and height > 0:
+        measured["resolution"] = resolve_measured_resolution(width, height)
+        aspect_ratio = resolve_measured_aspect_ratio(width, height)
+        if aspect_ratio:
+            measured["aspect_ratio"] = aspect_ratio
+
+    return measured
+
+
+async def record_worker_progress(
+    media_repo: MediaRepository,
+    media_item_id: int,
+    worker_logger: logging.Logger,
+    progress: dict | None = None,
+) -> None:
+    """Stamps a sign of life on an in-flight job's row.
+
+    A generation runs for minutes with nothing written to its row until it
+    finishes, so a job being worked on and one whose worker died look
+    identical: both sit in `processing` with the timestamps they were queued
+    with. There is no heartbeat column, but every write bumps `updated_at`,
+    which is enough to tell the two apart.
+
+    The write is best effort - a database hiccup here must not abandon a
+    generation that is otherwise going fine.
+
+    Args:
+        media_repo: Repository owning the job's media item.
+        media_item_id: The row to stamp.
+        worker_logger: The logger belonging to this job's worker.
+        progress: Columns to write alongside the stamp, if there are any.
+
+    """
+    try:
+        await media_repo.update(media_item_id, progress or {})
+    except Exception as e:  # noqa: BLE001 - liveness must not fail the job
+        worker_logger.warning(
+            "Could not record progress for media item %s: %s",
+            media_item_id,
+            e,
+        )
+
 
 # --- GEMINI OMNI (INTERACTIONS API) HELPERS ---
 
@@ -351,6 +497,16 @@ def _process_video_in_background(
                     gcs_service = GcsService()
 
                     try:
+                        # The row's created_at is when the job was queued, and
+                        # under a busy executor that can be long before a
+                        # thread picks it up. Stamping it here records when the
+                        # work actually started.
+                        await record_worker_progress(
+                            media_repo,
+                            media_item_id,
+                            worker_logger,
+                        )
+
                         client = GenAIModelSetup.init()
                         cfg = config_service
                         gcs_output_directory = f"gs://{cfg.GENMEDIA_BUCKET}"
@@ -576,6 +732,7 @@ def _process_video_in_background(
                         permanent_thumbnail_gcs_uris = []
                         final_gcs_uris = []
                         raw_data_dict = None
+                        measured_metadata: dict = {}
                         model_name_for_api = request_dto.generation_model.value
 
                         start_time = time.monotonic()
@@ -1001,6 +1158,17 @@ def _process_video_in_background(
                                         "output with neither data nor uri.",
                                     )
 
+                                # Measure the clip while a local copy is still
+                                # around. Omni is told no resolution, and an
+                                # edit is told neither dimensions nor length,
+                                # so the request describes none of this.
+                                clip_metadata: dict = {}
+                                if os.path.exists(local_output_path):
+                                    clip_metadata = await asyncio.to_thread(
+                                        build_measured_metadata,
+                                        local_output_path,
+                                    )
+
                                 # Generate local thumbnail
                                 thumbnail_path = None
                                 if os.path.exists(local_output_path):
@@ -1049,6 +1217,7 @@ def _process_video_in_background(
                                     thumbnail_gcs_uri,
                                     interaction_id,
                                     serialize_omni_steps(interaction.steps),
+                                    clip_metadata,
                                 )
 
                             tasks = [
@@ -1062,6 +1231,7 @@ def _process_video_in_background(
                                 thumbnail_gcs_uri,
                                 interaction_id,
                                 interaction_steps,
+                                clip_metadata,
                             ) in parallel_results:
                                 final_gcs_uris.append(final_gcs_uri)
                                 permanent_thumbnail_gcs_uris.append(
@@ -1076,6 +1246,12 @@ def _process_video_in_background(
                                         "interaction_id": interaction_id,
                                         "steps": interaction_steps,
                                     },
+                                )
+                                # Every clip of one job is generated from the
+                                # same response format, so the first one that
+                                # could be measured describes the row.
+                                measured_metadata = (
+                                    measured_metadata or clip_metadata
                                 )
 
                             raw_data_dict = {
@@ -1119,8 +1295,35 @@ def _process_video_in_background(
                                 )
                             )
 
+                            # Keep the operation on the row before waiting on
+                            # it. If this worker dies the row is all that is
+                            # left, and without the name there is no way to ask
+                            # Vertex what became of the job or to collect a
+                            # video it may have written in the meantime.
+                            await record_worker_progress(
+                                media_repo,
+                                media_item_id,
+                                worker_logger,
+                                {
+                                    "raw_data": {
+                                        "operation_name": operation.name
+                                    }
+                                },
+                            )
+
                             # Poll the operation status until the video is ready
+                            polling_started = time.monotonic()
                             while not operation.done:
+                                if (
+                                    time.monotonic() - polling_started
+                                    >= VEO_POLL_TIMEOUT_SECONDS
+                                ):
+                                    raise TimeoutError(
+                                        "Video generation operation "
+                                        f"{operation.name} was still running "
+                                        f"after {VEO_POLL_TIMEOUT_SECONDS:.0f}"
+                                        " seconds and was given up on.",
+                                    )
                                 worker_logger.info(
                                     "Waiting for video generation to complete, polling video generation status...",
                                     extra={
@@ -1135,6 +1338,13 @@ def _process_video_in_background(
                                     client.operations.get,
                                     operation,
                                 )
+                                # A poll that came back is the only evidence
+                                # anyone gets that this job is still alive.
+                                await record_worker_progress(
+                                    media_repo,
+                                    media_item_id,
+                                    worker_logger,
+                                )
 
                             if operation.error:
                                 raise Exception(operation.error)
@@ -1144,7 +1354,16 @@ def _process_video_in_background(
                                 or not operation.response
                                 or not operation.response.generated_videos
                             ):
-                                return
+                                # Returning here would walk straight past the
+                                # handler below, which is the only thing that
+                                # writes a terminal status, and leave the row
+                                # in `processing` for good. Vertex answers this
+                                # way when the request itself succeeded but
+                                # every candidate was filtered.
+                                raise RuntimeError(
+                                    "Video generation finished without "
+                                    "returning any videos.",
+                                )
 
                             # Download the generated video and create thumbnail
                             thumbnail_path = ""
@@ -1168,13 +1387,32 @@ def _process_video_in_background(
                                         destination_file_path=local_output_path,
                                     )
 
-                                    # Step 2: Generate Thumbnail from the first video frame
+                                    # Step 2: Measure the delivered clip, while
+                                    # the local copy is still around. An
+                                    # extension is asked for 7s whatever the
+                                    # request said, and Veo may return a
+                                    # smaller frame than was asked for.
+                                    if (
+                                        downloaded_video_path
+                                        and os.path.exists(
+                                            downloaded_video_path
+                                        )
+                                    ):
+                                        measured_metadata = (
+                                            measured_metadata
+                                            or await asyncio.to_thread(
+                                                build_measured_metadata,
+                                                downloaded_video_path,
+                                            )
+                                        )
+
+                                    # Step 3: Generate Thumbnail from the first video frame
                                     thumbnail_path = await asyncio.to_thread(
                                         generate_thumbnail,
                                         downloaded_video_path or "",
                                     )
 
-                                    # Step 3: Save the Thumbnail in GCS
+                                    # Step 4: Save the Thumbnail in GCS
                                     if thumbnail_path:
                                         # Get the parent directory of the thumbnail to clean it up later.
                                         temp_dir = os.path.dirname(
@@ -1231,6 +1469,12 @@ def _process_video_in_background(
                             "thumbnail_uris": permanent_thumbnail_gcs_uris,
                             "generation_time": generation_time,
                             "num_media": len(final_gcs_uris),
+                            # Replaces the request values the placeholder was
+                            # built from, which describe what was asked for
+                            # rather than what arrived. Empty when the clip
+                            # could not be probed, and then the request values
+                            # stand as the best guess available.
+                            **measured_metadata,
                         }
                         if raw_data_dict is not None:
                             update_data["raw_data"] = raw_data_dict
@@ -1263,9 +1507,27 @@ def _process_video_in_background(
                             "status": JobStatusEnum.FAILED,
                             "error_message": str(e),
                         }
-                        await media_repo.update(
-                            media_item_id, error_update_data
-                        )
+                        try:
+                            # A statement that failed leaves the session in an
+                            # aborted transaction, and the write below would
+                            # then fail too and leave the job in `processing`
+                            # for good. Every earlier write committed as it
+                            # went, so there is nothing here to lose.
+                            await db.rollback()
+                            await media_repo.update(
+                                media_item_id, error_update_data
+                            )
+                        except Exception as update_error:  # noqa: BLE001
+                            worker_logger.error(
+                                "Could not record the job's failure.",
+                                extra={
+                                    "json_fields": {
+                                        "media_id": media_item_id,
+                                        "error": str(update_error),
+                                    },
+                                },
+                                exc_info=True,
+                            )
 
         loop.run_until_complete(_async_worker())
         loop.close()
@@ -1321,6 +1583,15 @@ def _process_video_concatenation_in_background(
                     cfg = config_service
 
                     try:
+                        # Same reason as the generation worker: a row queued
+                        # behind three other jobs is otherwise indistinguishable
+                        # from one whose worker never ran.
+                        await record_worker_progress(
+                            media_repo,
+                            media_item_id,
+                            worker_logger,
+                        )
+
                         start_time = time.monotonic()
                         local_video_paths = []
 
@@ -1405,9 +1676,18 @@ def _process_video_concatenation_in_background(
                                 mime_type="image/png",
                             )
 
+                        # 5. Measure the joined clip before its temp directory
+                        # goes. Nothing about the output's length is known up
+                        # front: it is the sum of however long the inputs
+                        # turned out to be.
+                        measured_metadata = await asyncio.to_thread(
+                            build_measured_metadata,
+                            concatenated_path,
+                        )
+
                         end_time = time.monotonic()
 
-                        # 5. Update the placeholder MediaItem
+                        # 6. Update the placeholder MediaItem
                         update_data = {
                             "status": JobStatusEnum.COMPLETED,
                             "gcs_uris": [final_gcs_uri],
@@ -1416,6 +1696,7 @@ def _process_video_concatenation_in_background(
                             ),
                             "generation_time": end_time - start_time,
                             "num_media": 1,
+                            **measured_metadata,
                         }
                         await media_repo.update(media_item_id, update_data)
                         worker_logger.info(
@@ -1431,9 +1712,22 @@ def _process_video_concatenation_in_background(
                             "status": JobStatusEnum.FAILED,
                             "error_message": str(e),
                         }
-                        await media_repo.update(
-                            media_item_id, error_update_data
-                        )
+                        try:
+                            # See the generation worker: without the rollback a
+                            # database failure takes the status write down with
+                            # it and the job never leaves `processing`.
+                            await db.rollback()
+                            await media_repo.update(
+                                media_item_id, error_update_data
+                            )
+                        except Exception as update_error:  # noqa: BLE001
+                            worker_logger.error(
+                                "Could not record the failure on media item "
+                                "%s: %s",
+                                media_item_id,
+                                update_error,
+                                exc_info=True,
+                            )
                     finally:
                         if os.path.exists(temp_dir):
                             shutil.rmtree(temp_dir)

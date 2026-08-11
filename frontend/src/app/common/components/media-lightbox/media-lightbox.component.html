@@ -119,7 +119,7 @@
     <div class="media-actions-toolbar" *ngIf="mediaItem">
 
       <studio-button
-        *ngIf="showEditButton"
+        *ngIf="isImage && showEditButton"
         variant="primary"
         shape="circle"
         size="medium"
@@ -130,7 +130,7 @@
       </studio-button>
 
       <studio-button
-        *ngIf="showGenerateVideoButton && !isVideo"
+        *ngIf="isImage && showGenerateVideoButton"
         variant="primary"
         shape="circle"
         size="medium"
@@ -149,7 +149,7 @@
       </mat-menu>
 
       <studio-button
-        *ngIf="showVtoButton"
+        *ngIf="isImage && showVtoButton"
         variant="primary"
         shape="circle"
         size="medium"
@@ -195,6 +195,7 @@
       </studio-button>
 
       <studio-button
+        *ngIf="showTagsButton"
         variant="primary"
         shape="circle"
         size="medium"
@@ -216,33 +217,38 @@
       </studio-button>
       
       <studio-button
-        *ngIf="isVideo && showOmni"
+        *ngIf="isVideo && showOmniButton"
         variant="primary"
         size="medium"
+        [disabled]="!hasStoredClip"
         (click)="onEditWithOmniClick()"
-        matTooltip="Edit video with Omni"
+        [matTooltip]="
+          hasStoredClip ? 'Edit video with Omni' : noStoredClipReason
+        "
       >
         <mat-icon>layers</mat-icon>
         Edit with Omni
       </studio-button>
 
       <studio-button
-        *ngIf="isVideo"
+        *ngIf="isVideo && showExtendButton"
         variant="primary"
         size="medium"
+        [disabled]="!hasStoredClip"
         (click)="onExtendWithAiClick()"
-        matTooltip="Extend with AI"
+        [matTooltip]="hasStoredClip ? 'Extend with AI' : noStoredClipReason"
       >
         <mat-icon>auto_awesome</mat-icon>
         Extend
       </studio-button>
-      
+
       <studio-button
-        *ngIf="isVideo"
+        *ngIf="isVideo && showConcatenateButton"
         variant="primary"
         size="medium"
+        [disabled]="!hasStoredClip"
         (click)="onConcatenateClick()"
-        matTooltip="Concatenate Video"
+        [matTooltip]="hasStoredClip ? 'Concatenate Video' : noStoredClipReason"
       >
         <mat-icon>add_to_photos</mat-icon>
         Concatenate

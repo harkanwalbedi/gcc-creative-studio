@@ -56,26 +56,48 @@ export class MediaLightboxComponent
   @Input() showShareButton = true;
   @Input() showDownloadButton = true;
   @Input() showDeleteButton = false;
+  /**
+   * Whether the tag dialog is offered. Off for hosts whose item id is not a
+   * media item id - a template, a source asset - because the dialog assigns
+   * tags by id and would otherwise tag whichever media item shares the number.
+   */
+  @Input() showTagsButton = true;
+
+  // Each action is opted into by the host that wired up its output. They used
+  // to be driven by media type alone, so pages that never bound the output
+  // still painted the button and the click went nowhere.
+  @Input() showEditButton = false;
+  @Input() showGenerateVideoButton = false;
+  @Input() showVtoButton = false;
+  @Input() showOmniButton = false;
+  @Input() showExtendButton = false;
+  @Input() showConcatenateButton = false;
+
+  /**
+   * Offered but unusable, so the button is shown disabled carrying this rather
+   * than removed - the capability is real, this particular clip just cannot
+   * reach it.
+   */
+  readonly noStoredClipReason =
+    'This clip has no stored file, so it cannot be sent to the video tools';
 
   get isImage(): boolean {
     return this.mediaItem?.mimeType?.startsWith('image/') ?? false;
   }
 
-  get showOmni(): boolean {
-    return true;
+  /**
+   * Whether the selected clip is backed by a stored file.
+   *
+   * Every video action names the clip by id and index and leaves the worker to
+   * resolve the file, so an item assembled purely for display has nothing for
+   * it to resolve and the request fails server-side. Age is not a factor: a
+   * clip generated before Omni interactions were recorded still edits, because
+   * the worker falls back to sending the clip itself.
+   */
+  get hasStoredClip(): boolean {
+    return !!this.mediaItem?.gcsUris?.[this.selectedIndex];
   }
 
-  get showEditButton(): boolean {
-    return this.isImage;
-  }
-
-  get showGenerateVideoButton(): boolean {
-    return this.isImage;
-  }
-
-  get showVtoButton(): boolean {
-    return this.isImage;
-  }
   @Output() editClicked = new EventEmitter<number>();
   @Output() generateVideoClicked = new EventEmitter<{
     role: 'start' | 'end';
@@ -509,8 +531,10 @@ export class MediaLightboxComponent
     this.sendToVtoClicked.emit(this.selectedIndex);
   }
 
+  // The disabled state lives on the inner button, so a click landing on the
+  // wrapper around it would still reach these handlers.
   onEditWithOmniClick(): void {
-    if (this.mediaItem) {
+    if (this.mediaItem && this.hasStoredClip) {
       this.editWithOmniClicked.emit({
         mediaItem: this.mediaItem as MediaItem,
         selectedIndex: this.selectedIndex,
@@ -519,7 +543,7 @@ export class MediaLightboxComponent
   }
 
   onExtendWithAiClick() {
-    if (this.mediaItem) {
+    if (this.mediaItem && this.hasStoredClip) {
       this.extendWithAiClicked.emit({
         mediaItem: this.mediaItem as MediaItem,
         selectedIndex: this.selectedIndex,
@@ -528,7 +552,7 @@ export class MediaLightboxComponent
   }
 
   onConcatenateClick() {
-    if (this.mediaItem) {
+    if (this.mediaItem && this.hasStoredClip) {
       this.concatenateClicked.emit({
         mediaItem: this.mediaItem as MediaItem,
         selectedIndex: this.selectedIndex,
