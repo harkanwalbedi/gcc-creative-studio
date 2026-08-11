@@ -143,3 +143,6 @@ cython_debug/
 # media run would put customer footage here. The request/response JSON beside
 # them is kept - that is the only record of what the live API actually did.
 vpe_smoke_out/fixtures/
+seam_report/*.mp4
+seam_report/segments/
+

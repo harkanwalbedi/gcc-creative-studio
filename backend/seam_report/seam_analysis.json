@@ -1,0 +1,31 @@
+{
+  "source": "/tmp/real_10s_shot.mp4",
+  "source_frames": 240,
+  "aspect_ratio": "16:9",
+  "segments": [
+    {
+      "index": 0,
+      "first_frame": 0,
+      "frames": 120
+    },
+    {
+      "index": 1,
+      "first_frame": 120,
+      "frames": 120
+    }
+  ],
+  "rejoined": "seam_report/rejoined.mp4",
+  "verdict": "INVISIBLE",
+  "reading": "Every seam sits inside the normal frame-to-frame variation of this footage. Split-and-rejoin is viable.",
+  "worst_seam_times_p95": 0.34,
+  "baseline_median": 8.122,
+  "baseline_p95": 21.7286,
+  "baseline_samples": 238,
+  "seams": [
+    {
+      "frame": 120,
+      "delta": 7.4825,
+      "times_p95": 0.34
+    }
+  ]
+}

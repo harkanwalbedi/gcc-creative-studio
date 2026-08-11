@@ -306,7 +306,7 @@ def _concat(segments: list[Segment], into: Path) -> Path:
     """
     listing = into / "concat.txt"
     listing.write_text(
-        "".join(f"file '{item.upscaled}'\n" for item in segments),
+        "".join(f"file '{Path(item.upscaled).resolve()}'\n" for item in segments),
     )
     target = into / "rejoined.mp4"
     _ffmpeg(
