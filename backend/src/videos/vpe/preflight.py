@@ -457,9 +457,19 @@ def validate(
     The slot the file would occupy is inferred from what the file is: a
     video is checked against the capability's video constraints, a still
     against its image constraints, an audio track against its audio
-    constraints. That is enough because no capability accepts two different
-    videos or two different audio tracks, and the still slots of a single
-    capability share one set of constraints.
+    constraints. That holds for every capability but one, because no
+    capability accepts two different videos or two different audio tracks.
+
+    Omni-cine is the exception, and a still sent to it is under-checked. It
+    takes stills in two different roles: a reference image, which may be any
+    resolution, and a frame of a PNG or EXR input sequence, which the
+    documented input table requires to be 1280x720. Both arrive here as
+    ``VpeMediaKind.IMAGE`` and both are checked against the reference-image
+    constraints, so an off-spec sequence frame passes clean. The byte cap is
+    the same 30 MiB either way, so only the resolution goes unchecked.
+    Resolving it properly means telling ``validate`` which slot the caller
+    means, rather than guessing from the file, and that is worth doing when
+    omni-cine input sequences are actually wired up.
 
     Args:
         probe: A measurement from ``probe_media``.
