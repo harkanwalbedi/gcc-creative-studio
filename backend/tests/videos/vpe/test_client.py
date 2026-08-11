@@ -38,6 +38,7 @@ from src.videos.vpe.client import (
     VPE_REQUEST_TYPE_SHARED,
     VpeClient,
     VpeOperation,
+    VpeResult,
     parse_result,
 )
 from src.videos.vpe.errors import (
@@ -311,10 +312,20 @@ class FakeClock:
     def __init__(self):
         """Starts the clock at zero."""
         self.now = 0.0
+        self.sleeps = []
 
     def monotonic(self):
         """Returns the current fake time."""
         return self.now
+
+    def sleep(self, seconds):
+        """Records the delay and advances the clock.
+
+        The blocking wait sleeps through this rather than through asyncio,
+        so without it a half-hour timeout would take half an hour to test.
+        """
+        self.sleeps.append(seconds)
+        self.now += seconds
 
 
 class FakeAsyncio:
@@ -354,6 +365,10 @@ def fixture_fake_time(monkeypatch):
     fake_asyncio = FakeAsyncio(clock)
     monkeypatch.setattr(client_module, "time", clock)
     monkeypatch.setattr(client_module, "asyncio", fake_asyncio)
+    # The blocking wait sleeps through the clock rather than through asyncio,
+    # so its delays land on the clock; hang it off the returned double so a
+    # sync test can assert on them without a second fixture.
+    fake_asyncio.clock_sleeps = clock.sleeps
     return fake_asyncio
 
 
@@ -1022,6 +1037,112 @@ async def test_dry_run_walks_submit_then_wait_end_to_end(fake_time):
 
     assert result.primary_video.gcs_uri.endswith("/sample_0.mp4")
     assert fake_time.sleeps == [client_module.INITIAL_POLL_SECONDS]
+
+
+# --- The blocking caller's path --------------------------------------------
+#
+# Every test below exists because of a defect the first live run hit. The
+# suite passed throughout: it only ever polled by name and only ever awaited
+# the coroutine, so the sequence an ordinary blocking caller actually writes -
+# submit, then wait on what submit returned - was never once executed.
+
+
+def test_poll_accepts_the_operation_that_submit_returned():
+    """poll takes the object submit hands back, not only its name.
+
+    submit returns a VpeOperation and poll used to insist on a str, so the
+    obvious two-line sequence raised a TypeError deep inside the request.
+    """
+    session = FakeSession([FakeResponse(SUCCESS_BODY)])
+    client = make_client(session)
+    operation = VpeOperation.from_body(IN_PROGRESS_BODY)
+
+    current = client.poll(operation)
+
+    assert current.done is True
+    assert session.calls[0]["json"] == {
+        "operationName": DOC_A2V_OPERATION_NAME,
+    }
+
+
+def test_blocking_wait_returns_parsed_outputs_not_the_raw_operation(fake_time):
+    """The blocking wait resolves to outputs, like the coroutine.
+
+    Without this the caller gets an operation back and has to know to call
+    parse_result itself. The first live run did not, so a job that had
+    genuinely succeeded reported no output location.
+    """
+    session = FakeSession(
+        [FakeResponse(IN_PROGRESS_BODY), FakeResponse(SUCCESS_BODY)],
+    )
+    client = make_client(session)
+
+    result = client.wait_for_completion_sync(DOC_A2V_OPERATION_NAME)
+
+    assert isinstance(result, VpeResult)
+    assert result.primary_video.gcs_uri == (
+        "gs://BUCKET_NAME/outputs/sample_0.mp4"
+    )
+
+
+def test_blocking_wait_accepts_the_operation_that_submit_returned(fake_time):
+    """submit then wait, the way a script actually writes it."""
+    session = FakeSession(
+        [
+            FakeResponse({"name": DOC_A2V_OPERATION_NAME}),
+            FakeResponse(SUCCESS_BODY),
+        ],
+    )
+    client = make_client(session)
+
+    operation = client.submit(SAMPLE_PAYLOAD)
+    result = client.wait_for_completion_sync(operation)
+
+    assert result.primary_video.gcs_uri.endswith("/sample_0.mp4")
+
+
+def test_blocking_wait_backs_off_between_polls(fake_time):
+    """It widens the delay exactly as the coroutine does."""
+    session = FakeSession(
+        [
+            FakeResponse(IN_PROGRESS_BODY),
+            FakeResponse(IN_PROGRESS_BODY),
+            FakeResponse(SUCCESS_BODY),
+        ],
+    )
+    client = make_client(session)
+
+    client.wait_for_completion_sync(DOC_A2V_OPERATION_NAME)
+
+    assert fake_time.clock_sleeps == [10.0, 15.0, 22.5]
+
+
+def test_blocking_wait_reports_progress_through_on_poll(fake_time):
+    """A 4K upscale took 276 seconds live, so callers need to show progress."""
+    session = FakeSession(
+        [FakeResponse(IN_PROGRESS_BODY), FakeResponse(SUCCESS_BODY)],
+    )
+    client = make_client(session)
+    seen = []
+
+    client.wait_for_completion_sync(
+        DOC_A2V_OPERATION_NAME,
+        on_poll=seen.append,
+    )
+
+    assert [operation.done for operation in seen] == [False, True]
+
+
+def test_blocking_wait_times_out_without_cancelling_the_job(fake_time):
+    """A timeout is the caller giving up, not the job stopping."""
+    session = FakeSession([FakeResponse(IN_PROGRESS_BODY) for _ in range(50)])
+    client = make_client(session)
+
+    with pytest.raises(VpeTimeoutError):
+        client.wait_for_completion_sync(
+            DOC_A2V_OPERATION_NAME,
+            timeout_seconds=60,
+        )
 
 
 # --- Waiting for completion ------------------------------------------------

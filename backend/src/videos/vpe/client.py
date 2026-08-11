@@ -223,6 +223,14 @@ class VpeVideoOutput:
         the requested storageUri. The response names only the preview, so
         this is the prefix everything else has to be found under.
 
+        Confirmed against the live API: a job given
+        ``gs://bucket/out/upscale/`` answered with
+        ``gs://bucket/out/upscale/8396334043780905355/sample_0.mp4``. The
+        subdirectory is chosen by the service and appears nowhere in the
+        request, so a caller cannot predict it and must read it back off the
+        response - which is also why ingesting the rest of the directory
+        needs a list-by-prefix the storage service does not have yet.
+
         Returns:
             The parent gs:// prefix of the named file, without a trailing
             slash.
@@ -484,7 +492,8 @@ class VpeClient:
         """Fetches the current state of an operation.
 
         Args:
-            operation_name: Full resource name or VpeOperation returned by ``submit``.
+            operation_name: The operation ``submit`` returned, or just its
+                full resource name.
             preflight: What preflight measured about this job's inputs, used
                 to classify a rejection of the fetch call itself.
 
@@ -627,6 +636,107 @@ class VpeClient:
 
             try:
                 current = await self.poll_async(name, preflight=preflight)
+                failures = 0
+            except VpeTransportError as error:
+                failures += 1
+                if failures >= max_consecutive_failures:
+                    raise
+                logger.warning(
+                    "VPE poll failed (%d/%d), the job is still running: %s",
+                    failures,
+                    max_consecutive_failures,
+                    error,
+                    extra={"json_fields": {"operation_name": name}},
+                )
+                interval = min(interval * backoff_factor, max_interval_seconds)
+                continue
+
+            if on_poll is not None:
+                on_poll(current)
+            if current.done:
+                return parse_result(current, preflight=preflight)
+
+            logger.info(
+                "Waiting for VPE operation to complete",
+                extra={
+                    "json_fields": {
+                        "operation_name": name,
+                        "elapsed_seconds": round(
+                            time.monotonic() - started,
+                            1,
+                        ),
+                    },
+                },
+            )
+            interval = min(interval * backoff_factor, max_interval_seconds)
+
+    def wait_for_completion_sync(
+        self,
+        operation: VpeOperation | str,
+        *,
+        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+        initial_interval_seconds: float = INITIAL_POLL_SECONDS,
+        max_interval_seconds: float = MAX_POLL_SECONDS,
+        backoff_factor: float = POLL_BACKOFF_FACTOR,
+        max_consecutive_failures: int = MAX_CONSECUTIVE_POLL_FAILURES,
+        preflight: PreflightSnapshot | None = None,
+        on_poll: Callable[[VpeOperation], None] | None = None,
+    ) -> VpeResult:
+        """Blocking counterpart of :meth:`wait_for_completion`.
+
+        The worker is async and uses the coroutine. Scripts and one-shot
+        tools are not, and without a blocking version they hand-roll a
+        polling loop - which is how the first live run ended up with one
+        that never called ``parse_result``, so a job that had in fact
+        succeeded could not report where its output had landed. Same
+        semantics as the coroutine throughout: same backoff, same tolerance
+        of a dropped poll, same parsed return.
+
+        Args:
+            operation: The operation, or just its resource name.
+            timeout_seconds: How long to keep polling in total.
+            initial_interval_seconds: Delay before the first poll.
+            max_interval_seconds: Ceiling the widening delay stops at.
+            backoff_factor: Multiplier applied after each unfinished poll.
+            max_consecutive_failures: Transport failures tolerated in a row
+                before giving up. A dropped poll says nothing about the job.
+            preflight: What preflight measured before submitting.
+            on_poll: Called with each observed state, for progress reporting.
+
+        Returns:
+            The finished operation's outputs.
+
+        Raises:
+            VpeTimeoutError: If the ceiling is reached first. The job is not
+                cancelled and can still be polled by name.
+            VpeApiError: If the operation finished with a failure.
+            VpeMissingOutputError: If it finished clean but named no output.
+            VpeTransportError: If polling fails repeatedly.
+        """
+        if isinstance(operation, VpeOperation):
+            if operation.done:
+                return parse_result(operation, preflight=preflight)
+            name = operation.name
+        else:
+            name = operation
+
+        started = time.monotonic()
+        deadline = started + timeout_seconds
+        interval = initial_interval_seconds
+        failures = 0
+
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise VpeTimeoutError(
+                    name,
+                    elapsed_seconds=time.monotonic() - started,
+                    timeout_seconds=timeout_seconds,
+                )
+            time.sleep(min(interval, remaining))
+
+            try:
+                current = self.poll(name, preflight=preflight)
                 failures = 0
             except VpeTransportError as error:
                 failures += 1
