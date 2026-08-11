@@ -243,22 +243,33 @@ class TestRequireVpeConfigured:
 
     def test_a_missing_bucket_is_refused(self, monkeypatch):
         """VPE reads and writes Cloud Storage only."""
-        cfg = _settings(monkeypatch, enabled=True, bucket="")
+        cfg = _settings(monkeypatch, enabled=True, bucket="", project_id="p")
         with pytest.raises(VpeJobError, match="VPE_BUCKET"):
             require_vpe_configured(cfg)
 
+    def test_a_missing_project_is_refused(self, monkeypatch):
+        """The deployment project is not necessarily the allowlisted one."""
+        cfg = _settings(monkeypatch, enabled=True, bucket="b", project_id="")
+        with pytest.raises(VpeJobError, match="VPE_PROJECT_ID"):
+            require_vpe_configured(cfg)
+
     def test_a_configured_deployment_passes(self, monkeypatch):
-        """Both set is the only combination that runs."""
-        require_vpe_configured(_settings(monkeypatch, enabled=True, bucket="b"))
+        """All three set is the only combination that runs."""
+        require_vpe_configured(
+            _settings(monkeypatch, enabled=True, bucket="b", project_id="p"),
+        )
 
 
-def _settings(monkeypatch, *, enabled: bool, bucket: str):
-    """Returns the app settings with VPE's two switches overridden.
+def _settings(
+    monkeypatch, *, enabled: bool, bucket: str, project_id: str = "p"
+):
+    """Returns the app settings with VPE's switches overridden.
 
     Args:
         monkeypatch: pytest's attribute patcher.
         enabled: Value for VPE_ENABLED.
         bucket: Value for VPE_BUCKET.
+        project_id: Value for VPE_PROJECT_ID.
 
     Returns:
         The patched settings object.
@@ -267,6 +278,7 @@ def _settings(monkeypatch, *, enabled: bool, bucket: str):
 
     monkeypatch.setattr(config_service, "VPE_ENABLED", enabled)
     monkeypatch.setattr(config_service, "VPE_BUCKET", bucket)
+    monkeypatch.setattr(config_service, "VPE_PROJECT_ID", project_id)
     return config_service
 
 

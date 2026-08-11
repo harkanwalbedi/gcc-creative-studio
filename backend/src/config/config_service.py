@@ -88,6 +88,15 @@ class ConfigService(BaseSettings):
     # holding GENMEDIA_BUCKET. Left empty on purpose rather than defaulted:
     # a wrong bucket fails deep inside a long-running job.
     VPE_BUCKET: str = ""
+    # The publisher endpoint is allowlist-gated per calling project. In the
+    # intended production deployment this is the same project as PROJECT_ID,
+    # but every other deployment this app runs in - local dev, a corp test
+    # box - is not itself allowlisted, so falling back to PROJECT_ID would
+    # make those environments call under a project that was never
+    # allowlisted. Left empty rather than defaulted for the same reason as
+    # VPE_BUCKET: that failure surfaces as a permission error indistinguishable
+    # from any other until someone reads the project name out of it.
+    VPE_PROJECT_ID: str = ""
     # Renders and logs the request payload instead of calling the API, so the
     # whole path can be walked without allowlist access.
     VPE_DRY_RUN: bool = False

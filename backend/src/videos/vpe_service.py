@@ -225,7 +225,8 @@ def require_vpe_configured(cfg: ConfigService) -> None:
         cfg: The settings to check.
 
     Raises:
-        VpeJobError: If VPE is disabled or has no bucket of its own.
+        VpeJobError: If VPE is disabled, or has no bucket or project of its
+            own.
     """
     if not cfg.VPE_ENABLED:
         raise VpeJobError("VPE is not enabled on this deployment.")
@@ -233,6 +234,12 @@ def require_vpe_configured(cfg: ConfigService) -> None:
         raise VpeJobError(
             "VPE_BUCKET is not set. VPE reads and writes Cloud Storage only,"
             " and its bucket must sit in the allowlisted project.",
+        )
+    if not cfg.VPE_PROJECT_ID:
+        raise VpeJobError(
+            "VPE_PROJECT_ID is not set. The publisher endpoint is"
+            " allowlisted per calling project, which is not necessarily the"
+            " project this app is deployed into.",
         )
 
 
@@ -315,7 +322,11 @@ def _process_vpe_upscale_in_background(  # noqa: PLR0915
                     # read from or write to.
                     app_gcs = GcsService()
                     vpe_gcs = GcsService(bucket_name=cfg.VPE_BUCKET)
-                    client = VpeClient()
+                    # Same reason as the bucket above: the allowlisted
+                    # project is not necessarily this app's own, and a
+                    # client built without the override would silently call
+                    # under a project that was never allowlisted.
+                    client = VpeClient(project_id=cfg.VPE_PROJECT_ID)
                     uploaded_segment_uris: list[str] = []
 
                     try:
