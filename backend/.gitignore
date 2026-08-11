@@ -136,3 +136,5 @@ cython_debug/
 # Logs
 */output
 *.info
+.host_venv/
+

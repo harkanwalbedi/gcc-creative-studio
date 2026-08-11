@@ -409,11 +409,14 @@ def cmd_check(args: argparse.Namespace) -> int:
                        dry_run=False)
     url = client.endpoint_url("predictLongRunning")
     print(f"  {url}")
-    code, token = _run(["gcloud", "auth", "print-access-token"])
+    code, token_out = _run(["gcloud", "auth", "application-default", "print-access-token"])
+    if code != 0 or not token_out.strip():
+        code, token_out = _run(["gcloud", "auth", "print-access-token"])
     if code == 0:
+        token = token_out.strip().splitlines()[-1].strip()
         probe = ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
                  "-X", "POST", url,
-                 "-H", f"Authorization: Bearer {token.strip()}",
+                 "-H", f"Authorization: Bearer {token}",
                  "-H", "Content-Type: application/json",
                  "-H", "X-Vertex-AI-LLM-Request-Type: shared",
                  "-d", '{"instances":[{}],"parameters":{}}']
@@ -563,13 +566,14 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def _poll(client: VpeClient, operation: Any, timeout: int) -> Any:
     """Polls an operation to completion without asyncio."""
+    from src.videos.vpe.client import parse_result
     deadline = time.time() + timeout
     delay = 10
     while time.time() < deadline:
         time.sleep(delay)
         current = client.poll(operation)
         if getattr(current, "done", False):
-            return current
+            return parse_result(current)
     raise TimeoutError(f"operation did not finish within {timeout}s")
 
 

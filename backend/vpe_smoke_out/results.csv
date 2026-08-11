@@ -1,0 +1,2 @@
+case,model,status,detail,seconds,output
+upscale,upscale,SUCCESS,,276.4,gs://vertex-test-project-383415-veo-exp/vpe-smoke/out/upscale/8396334043780905355

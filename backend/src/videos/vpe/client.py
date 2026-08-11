@@ -477,14 +477,14 @@ class VpeClient:
 
     def poll(
         self,
-        operation_name: str,
+        operation_name: VpeOperation | str,
         *,
         preflight: PreflightSnapshot | None = None,
     ) -> VpeOperation:
         """Fetches the current state of an operation.
 
         Args:
-            operation_name: Full resource name returned by ``submit``.
+            operation_name: Full resource name or VpeOperation returned by ``submit``.
             preflight: What preflight measured about this job's inputs, used
                 to classify a rejection of the fetch call itself.
 
@@ -499,6 +499,8 @@ class VpeClient:
             VpeApiError: If the fetch call itself was rejected.
             VpeTransportError: If the exchange itself failed.
         """
+        if isinstance(operation_name, VpeOperation):
+            operation_name = operation_name.name
         if not operation_name:
             raise ValueError("operation_name is required to poll")
         if DRY_RUN_MARKER in operation_name:
