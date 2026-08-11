@@ -1,0 +1,14 @@
+{
+  "name": "projects/vertex-test-project-383415/locations/us-central1/publishers/google/models/veo-experimental/operations/f0d99679-eaec-4480-b744-540c55fec0ac",
+  "done": true,
+  "response": {
+    "@type": "type.googleapis.com/cloud.ai.large_models.vision.GenerateVideoResponse",
+    "raiMediaFilteredCount": 0,
+    "videos": [
+      {
+        "gcsUri": "gs://vertex-test-project-383415-veo-exp/vpe-smoke/out/video_transform/4470539692718770830/sample_0.mp4",
+        "mimeType": "video/mp4"
+      }
+    ]
+  }
+}
