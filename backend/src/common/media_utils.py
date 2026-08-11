@@ -20,6 +20,7 @@ import logging
 import os
 import pathlib
 import subprocess
+from fractions import Fraction
 
 from PIL import Image as PILImage
 
@@ -237,6 +238,88 @@ def get_video_dimensions(video_path: str) -> tuple[int, int]:
     width = data["streams"][0]["width"]
     height = data["streams"][0]["height"]
     return width, height
+
+
+def _measure_duration_seconds(stream: dict, container: dict) -> float | None:
+    """Works out how long a video stream runs, in seconds.
+
+    Args:
+        stream: The ffprobe entry for the first video stream.
+        container: The ffprobe entry for the file as a whole.
+
+    Returns:
+        The stream's length in seconds, or None if neither the frames nor a
+        declared duration could be read.
+
+    """
+    try:
+        frames = int(stream.get("nb_frames", 0))
+        frame_rate = float(Fraction(stream.get("avg_frame_rate", "0")))
+        if frames > 0 and frame_rate > 0:
+            return frames / frame_rate
+    except (TypeError, ValueError, ZeroDivisionError):
+        pass
+
+    # Fragmented files carry no frame count, so fall back to whatever the file
+    # declares even though that value is the padded one.
+    declared = stream.get("duration") or container.get("duration")
+    try:
+        return float(declared)
+    except (TypeError, ValueError):
+        return None
+
+
+def get_video_metadata(video_path: str) -> dict | None:
+    """Uses ffprobe to measure what a video file actually contains.
+
+    The length is counted in frames rather than read off the container. A
+    nominal 10s clip at 24fps holds 240 frames but declares 10.005s, and the
+    padding differs from clip to clip, so rounding the declared value gives 10
+    for one clip and 9 for the next. Frames over frame rate is the length that
+    was encoded.
+
+    Args:
+        video_path: Path to a local video file.
+
+    Returns:
+        A dict with "width", "height" and "duration_seconds" (any of which may
+        be None), or None if the file cannot be probed at all - a caller is
+        better off keeping what it already had than recording a guess.
+
+    """
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height,nb_frames,avg_frame_rate,duration:"
+        "format=duration",
+        "-of",
+        "json",
+        video_path,
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        data = json.loads(result.stdout)
+        stream = data["streams"][0]
+        return {
+            "width": stream.get("width"),
+            "height": stream.get("height"),
+            "duration_seconds": _measure_duration_seconds(
+                stream,
+                data.get("format") or {},
+            ),
+        }
+    except Exception as e:
+        logger.error("Error probing video %s: %s", video_path, e)
+        return None
 
 
 def strip_audio(video_path: str, output_path: str) -> str | None:

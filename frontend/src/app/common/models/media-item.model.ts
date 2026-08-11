@@ -75,6 +75,9 @@ export interface MediaItem {
   // Video specific
   aspect?: string; // Note: 'aspect' is used for video, 'aspectRatio' for image
   duration?: number;
+  // Wire name for the stored clip length, after the backend's duration_seconds
+  // column. GalleryService maps it onto 'duration', which is what views read.
+  durationSeconds?: number;
   referenceImage?: string;
   lastReferenceImage?: string;
   enhancedPromptUsed?: boolean;

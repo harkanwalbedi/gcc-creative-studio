@@ -287,13 +287,26 @@ class AdminRepository:
         return {row.month: row.count for row in results}
 
     async def cleanup_stuck_jobs(self) -> int:
-        """Marks processing jobs older than 1 hour as stopped."""
+        """Marks processing jobs silent for over 1 hour as stopped."""
         one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
         query = (
             update(MediaItem)
             .where(MediaItem.status == JobStatusEnum.PROCESSING.value)
-            .where(MediaItem.created_at < one_hour_ago)
-            .values(status=JobStatusEnum.STOPPED.value)
+            # created_at is submission time, so a job still queued behind a
+            # busy worker pool can look an hour old before it has run a line.
+            # updated_at moves on every BaseRepository.update, so any write a
+            # worker makes counts as a sign of life here and the reaper never
+            # has to learn about a dedicated liveness column.
+            .where(MediaItem.updated_at < one_hour_ago)
+            # A soft-deleted row is nobody's stuck job.
+            .where(MediaItem.deleted_at.is_(None))
+            .values(
+                status=JobStatusEnum.STOPPED.value,
+                error_message=(
+                    "Generation stopped by an administrator after an hour "
+                    "with no sign of progress."
+                ),
+            )
         )
         result = await self.db.execute(query)
         await self.db.commit()

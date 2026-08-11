@@ -40,6 +40,12 @@
     <div class="lg:col-span-2">
       <app-media-lightbox [mediaItem]="mediaItem" [initialIndex]="initialSlideIndex"
         [showDeleteButton]="true"
+        [showEditButton]="true"
+        [showGenerateVideoButton]="true"
+        [showVtoButton]="true"
+        [showOmniButton]="true"
+        [showExtendButton]="true"
+        [showConcatenateButton]="true"
         (editClicked)="generateWithThisImage($event)"
         (generateVideoClicked)="generateVideoWithImage($event)"
         (sendToVtoClicked)="sendToVto($event)"
@@ -643,6 +649,10 @@
   <div *ngIf="selectedAssetForLightbox" class="fixed inset-0 bg-black/80 z-[1000] flex items-center justify-center p-4"
     (click)="closeLightbox()">
     <div (click)="$event.stopPropagation()" class="relative w-full h-full max-w-7xl max-h-[90vh] flex">
+      <!--
+        No tag button: the id here is the source asset's, and the dialog tags
+        by id against the media items, so it would tag an unrelated item.
+      -->
       <app-media-lightbox
       class="w-full h-full"
       [mediaItem]="selectedAssetForLightbox"
@@ -650,6 +660,7 @@
       [showSeeMoreInfoButton]="false"
       [showShareButton]="false"
       [showDownloadButton]="true"
+      [showTagsButton]="false"
     ></app-media-lightbox>
   </div>
   <button (click)="closeLightbox()"

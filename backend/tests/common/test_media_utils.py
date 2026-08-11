@@ -16,12 +16,15 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from src.common.media_utils import (
     concatenate_videos,
     generate_image_thumbnail_bytes,
     generate_image_thumbnail_from_gcs,
     generate_thumbnail,
     get_video_dimensions,
+    get_video_metadata,
 )
 
 
@@ -189,3 +192,72 @@ def test_concatenate_videos_called_process_error():
                 ["/tmp/v1.mp4", "/tmp/v2.mp4"], "/tmp/output.mp4"
             )
             assert res is None
+
+
+def test_get_video_metadata_counts_frames_rather_than_trusting_the_container():
+    """A nominal 10s clip declares 10.005s but holds exactly 240 frames.
+
+    The padding differs from clip to clip, so a rounded container duration
+    reads 10 for one clip and 9 for the next.
+    """
+    with patch("src.common.media_utils.subprocess.run") as mock_run:
+        mock_run.return_value.stdout = """
+            {
+                "streams": [
+                    {
+                        "width": 1920,
+                        "height": 1080,
+                        "nb_frames": "240",
+                        "avg_frame_rate": "24/1",
+                        "duration": "10.005000"
+                    }
+                ],
+                "format": {"duration": "10.005000"}
+            }
+        """
+
+        metadata = get_video_metadata("/tmp/video.mp4")
+
+        assert metadata == {
+            "width": 1920,
+            "height": 1080,
+            "duration_seconds": 10.0,
+        }
+
+
+def test_get_video_metadata_handles_a_fractional_frame_rate():
+    """29.97fps is 30000/1001, and 300 frames of it run just over 10s."""
+    with patch("src.common.media_utils.subprocess.run") as mock_run:
+        mock_run.return_value.stdout = (
+            '{"streams": [{"width": 1280, "height": 720, '
+            '"nb_frames": "300", "avg_frame_rate": "30000/1001"}]}'
+        )
+
+        metadata = get_video_metadata("/tmp/video.mp4")
+
+        assert metadata["duration_seconds"] == pytest.approx(10.01, abs=0.001)
+
+
+def test_get_video_metadata_falls_back_to_the_declared_duration():
+    """Fragmented files carry no frame count at all."""
+    with patch("src.common.media_utils.subprocess.run") as mock_run:
+        mock_run.return_value.stdout = (
+            '{"streams": [{"width": 1920, "height": 1080, '
+            '"avg_frame_rate": "0/0"}], "format": {"duration": "8.024000"}}'
+        )
+
+        metadata = get_video_metadata("/tmp/video.mp4")
+
+        assert metadata["duration_seconds"] == 8.024
+
+
+def test_get_video_metadata_returns_none_when_the_file_cannot_be_probed():
+    with patch("src.common.media_utils.subprocess.run") as mock_run:
+        import subprocess
+
+        mock_run.side_effect = subprocess.CalledProcessError(
+            1,
+            "cmd",
+            stderr="error",
+        )
+        assert get_video_metadata("/tmp/missing.mp4") is None

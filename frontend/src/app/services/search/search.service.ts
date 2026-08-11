@@ -33,6 +33,7 @@ import {JobStatus, MediaItem} from '../../common/models/media-item.model';
 import {ImagenRequest, VeoRequest} from '../../common/models/search.model';
 import {
   handleErrorSnackbar,
+  handleInfoSnackbar,
   handleSuccessSnackbar,
 } from '../../utils/handleMessageSnackbar';
 
@@ -80,6 +81,21 @@ export class SearchService {
     private _snackBar: MatSnackBar,
   ) {}
 
+  /**
+   * Reports whether a job will never change state again, so the poller can let
+   * go of it. STOPPED counts as much as FAILED: the admin stuck-job cleanup
+   * ends a job without the worker ever reporting back, and a poller that only
+   * looks for COMPLETED/FAILED keeps requesting that row for the life of the
+   * tab.
+   */
+  private isJobFinished(item: MediaItem): boolean {
+    return (
+      item.status === JobStatus.COMPLETED ||
+      item.status === JobStatus.FAILED ||
+      item.status === JobStatus.STOPPED
+    );
+  }
+
   searchImagen(searchRequest: ImagenRequest) {
     const searchURL = `${environment.backendURL}/images/generate-images`;
     return this.http
@@ -102,6 +118,9 @@ export class SearchService {
 
   clearActiveImageJob() {
     this.activeImageJob.next(null);
+    // Callers clear a job when its result has been dismissed or deleted, so
+    // there is nothing left for an in-flight poll to report on.
+    this.stopImagenPolling();
   }
 
   private startImagenPolling(mediaId: number): void {
@@ -111,13 +130,15 @@ export class SearchService {
         switchMap(() => this.getImagenMediaItem(mediaId)),
         tap(latestItem => {
           this.activeImageJob.next(latestItem);
-          if (
-            latestItem.status === JobStatus.COMPLETED ||
-            latestItem.status === JobStatus.FAILED
-          ) {
+          if (this.isJobFinished(latestItem)) {
             this.stopImagenPolling();
             if (latestItem.status === JobStatus.COMPLETED) {
               handleSuccessSnackbar(this._snackBar, 'Your images are ready!');
+            } else if (latestItem.status === JobStatus.STOPPED) {
+              handleInfoSnackbar(
+                this._snackBar,
+                'Your image generation was stopped before it finished.',
+              );
             } else {
               handleErrorSnackbar(
                 this._snackBar,
@@ -181,6 +202,7 @@ export class SearchService {
 
   clearActiveVideoJob() {
     this.activeVideoJob.next(null);
+    this.stopVeoPolling();
   }
 
   /**
@@ -198,13 +220,15 @@ export class SearchService {
           this.activeVideoJob.next(latestItem);
 
           // If the job is finished, stop polling
-          if (
-            latestItem.status === JobStatus.COMPLETED ||
-            latestItem.status === JobStatus.FAILED
-          ) {
+          if (this.isJobFinished(latestItem)) {
             this.stopVeoPolling();
             if (latestItem.status === JobStatus.COMPLETED) {
               handleSuccessSnackbar(this._snackBar, 'Your video is ready!');
+            } else if (latestItem.status === JobStatus.STOPPED) {
+              handleInfoSnackbar(
+                this._snackBar,
+                'Your video generation was stopped before it finished.',
+              );
             } else {
               handleErrorSnackbar(
                 this._snackBar,
@@ -286,15 +310,17 @@ export class SearchService {
         tap(latestItem => {
           this.activeVtoJob.next(latestItem);
 
-          if (
-            latestItem.status === JobStatus.COMPLETED ||
-            latestItem.status === JobStatus.FAILED
-          ) {
+          if (this.isJobFinished(latestItem)) {
             this.stopVtoPolling();
             if (latestItem.status === JobStatus.COMPLETED) {
               handleSuccessSnackbar(
                 this._snackBar,
                 'Your VTO result is ready!',
+              );
+            } else if (latestItem.status === JobStatus.STOPPED) {
+              handleInfoSnackbar(
+                this._snackBar,
+                'Your VTO generation was stopped before it finished.',
               );
             } else {
               handleErrorSnackbar(
@@ -351,6 +377,7 @@ export class SearchService {
 
   clearActiveAudioJob() {
     this.activeAudioJob.next(null);
+    this.stopAudioPolling();
   }
 
   /**
@@ -366,13 +393,15 @@ export class SearchService {
         tap(latestItem => {
           this.activeAudioJob.next(latestItem);
 
-          if (
-            latestItem.status === JobStatus.COMPLETED ||
-            latestItem.status === JobStatus.FAILED
-          ) {
+          if (this.isJobFinished(latestItem)) {
             this.stopAudioPolling();
             if (latestItem.status === JobStatus.COMPLETED) {
               handleSuccessSnackbar(this._snackBar, 'Your audio is ready!');
+            } else if (latestItem.status === JobStatus.STOPPED) {
+              handleInfoSnackbar(
+                this._snackBar,
+                'Your audio generation was stopped before it finished.',
+              );
             } else {
               handleErrorSnackbar(
                 this._snackBar,

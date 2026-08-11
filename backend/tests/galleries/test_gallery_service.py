@@ -14,6 +14,8 @@
 """Tests for Gallery Service."""
 
 
+import io
+import zipfile
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
@@ -319,6 +321,61 @@ async def test_bulk_download_success(service):
 
     assert response.status_code == 200
     assert "application/zip" in response.headers["Content-Type"]
+
+
+@pytest.mark.anyio
+async def test_bulk_download_includes_every_sibling_uri(service):
+    from src.galleries.dto.bulk_download_dto import (
+        BulkDownloadDto,
+        BulkDownloadItemDto,
+    )
+
+    bulk_dto = BulkDownloadDto(
+        workspace_id=99,
+        items=[
+            BulkDownloadItemDto(id=1, type="media_item"),
+            BulkDownloadItemDto(id=2, type="media_item"),
+        ],
+    )
+    current_user = UserModel(
+        id=1,
+        email="user@test.com",
+        name="User",
+        roles=[UserRoleEnum.USER],
+    )
+
+    four_clips = MagicMock(
+        id=1,
+        gcs_uris=[f"gs://bucket/sample_{index}.mp4" for index in range(4)],
+    )
+    four_clips.mime_type = "video/mp4"
+    one_image = MagicMock(id=2, gcs_uris=["gs://bucket/image.png"])
+    one_image.mime_type = "image/png"
+    service.mock_media_repo.get_by_id.side_effect = [four_clips, one_image]
+
+    service.mock_gcs_service.download_stream_from_gcs.side_effect = (
+        lambda gcs_uri: iter([gcs_uri.encode()])
+    )
+    service.mock_workspace_auth.authorize.return_value = None
+
+    response = await service.bulk_download(bulk_dto, current_user)
+    body = b"".join([chunk async for chunk in response.body_iterator])
+
+    with zipfile.ZipFile(io.BytesIO(body)) as archive:
+        names = archive.namelist()
+        second_clip = archive.read("media_1_1.mp4")
+        manifest = archive.read("manifest.txt").decode()
+
+    assert names == [
+        "media_1_0.mp4",
+        "media_1_1.mp4",
+        "media_1_2.mp4",
+        "media_1_3.mp4",
+        "media_2.png",
+        "manifest.txt",
+    ]
+    assert second_clip == b"gs://bucket/sample_1.mp4"
+    assert manifest.count("- Success:") == 5
 
 
 @pytest.mark.anyio
