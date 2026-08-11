@@ -1,2 +1,0 @@
-file '/app/media_ops_report/segment_00.mp4'
-file '/app/media_ops_report/segment_01.mp4'

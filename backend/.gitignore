@@ -145,7 +145,8 @@ cython_debug/
 vpe_smoke_out/fixtures/
 seam_report/*.mp4
 seam_report/segments/
-media_ops_report/*.mp4
-media_ops_report/*.png
-media_ops_report/segments/
+# Unlike seam_report, nothing here is a record of a live API call - it is
+# all local ffmpeg output verify_media_ops.py regenerates every run - so the
+# whole directory is disposable, report json included.
+media_ops_report/
 
