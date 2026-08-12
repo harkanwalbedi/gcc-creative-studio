@@ -100,6 +100,51 @@ def has_audio_stream(source: Path | str) -> bool:
         ) from error
 
 
+def written_frames(target: Path | str) -> int:
+    """Counts the video frames in a file ffmpeg has just written.
+
+    Reads the container's own count rather than decoding. ffmpeg writes an
+    accurate ``nb_frames`` into the files it produces, so this costs a
+    metadata read - which is the only reason it is affordable to do after
+    every cut.
+
+    Args:
+        target: The file to count.
+
+    Returns:
+        The frame count, or zero if the file carries no video stream at all.
+
+    Raises:
+        VpeMediaOpError: If ffprobe's output cannot be read.
+    """
+    output = _run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=nb_frames",
+            "-of",
+            "json",
+            str(target),
+        ],
+    )
+    try:
+        streams = json.loads(output).get("streams") or []
+    except json.JSONDecodeError as error:
+        raise VpeMediaOpError(
+            f"Could not read a frame count from {target}: {error}",
+        ) from error
+    if not streams:
+        return 0
+    try:
+        return int(streams[0].get("nb_frames") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def cut_segment(
     source: Path | str,
     target: Path | str,
@@ -124,6 +169,10 @@ def cut_segment(
 
     Returns:
         The path written.
+
+    Raises:
+        VpeMediaOpError: If the cut did not write the frames it was asked
+            for.
     """
     last_frame = first_frame + frames - 1
     _ffmpeg(
@@ -151,6 +200,22 @@ def cut_segment(
         "yuv420p",
         str(target),
     )
+    # ffmpeg exits zero having written whatever it could, so the only proof
+    # the cut is the length that was planned is to count it. The count the
+    # planner divided up comes from the container, which declares the samples
+    # in the track; `select` keeps the frames the file actually presents, and
+    # an mp4 edit list - what an `ffmpeg -ss ... -c copy` trim leaves behind -
+    # makes those two disagree. Unchecked, a short final segment goes to the
+    # API under the minimum it accepts, after the segments before it have
+    # already been submitted and paid for.
+    written = written_frames(target)
+    if written != frames:
+        raise VpeMediaOpError(
+            f"Cutting {frames} frames from frame {first_frame} of {source}"
+            f" wrote {written} instead. The source presents fewer frames than"
+            " its container declares, which is what an 'ffmpeg -ss ... -c"
+            " copy' trim leaves behind; re-encode it before upscaling.",
+        )
     return Path(target)
 
 

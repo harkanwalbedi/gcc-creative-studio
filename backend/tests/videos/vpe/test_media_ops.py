@@ -32,6 +32,7 @@ from src.videos.vpe.media_ops import (
     cut_segment,
     has_audio_stream,
     restore_audio,
+    written_frames,
 )
 
 _FPS = 24
@@ -181,6 +182,120 @@ class TestCutSegment:
             fps=_FPS,
         )
         assert has_audio_stream(target) is False
+
+    def test_a_cut_running_past_the_end_raises(
+        self,
+        source: Path,
+        tmp_path: Path,
+    ):
+        """ffmpeg exits zero having written whatever it could.
+
+        Asking for 120 frames from frame 200 of a 240 frame clip writes 40.
+        Left unchecked that segment reaches the API under the 96 frame
+        minimum, after its siblings have already been submitted and billed.
+        """
+        with pytest.raises(VpeMediaOpError, match="wrote 40"):
+            cut_segment(
+                source,
+                tmp_path / "past_the_end.mp4",
+                first_frame=200,
+                frames=120,
+                fps=_FPS,
+            )
+
+    def test_a_container_that_over_declares_its_length_raises(
+        self,
+        source: Path,
+        tmp_path: Path,
+    ):
+        """Regression: the planner and the cut can measure different films.
+
+        An ``ffmpeg -ss ... -c copy`` trim leaves an mp4 edit list behind.
+        The track still holds every sample, so the container - which is what
+        the planner divides up - keeps declaring the original length, while
+        the decoder presents the shorter film ``select`` actually cuts. A
+        plan of two 120 frame halves then has a second half that is 96
+        frames long and nothing says so.
+        """
+        trimmed = tmp_path / "trimmed.mp4"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-v",
+                "error",
+                "-y",
+                "-ss",
+                "1",
+                "-i",
+                str(source),
+                "-c",
+                "copy",
+                str(trimmed),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        # The premise. If ffmpeg ever stops writing the edit list this test
+        # is measuring nothing, and should say so rather than pass quietly.
+        assert written_frames(trimmed) == 240
+        assert _frame_count(trimmed) < 240
+
+        # The first half is entirely inside the film that survives, so the
+        # split gets underway looking healthy.
+        cut_segment(
+            source=trimmed,
+            target=tmp_path / "half_0.mp4",
+            first_frame=0,
+            frames=120,
+            fps=_FPS,
+        )
+        with pytest.raises(VpeMediaOpError, match="re-encode it"):
+            cut_segment(
+                source=trimmed,
+                target=tmp_path / "half_1.mp4",
+                first_frame=120,
+                frames=120,
+                fps=_FPS,
+            )
+
+
+class TestWrittenFrames:
+    """The post-condition's own measurement."""
+
+    def test_it_reads_the_count_ffmpeg_wrote(self, source: Path):
+        """The fixture is 240 frames and declares as much."""
+        assert written_frames(source) == 240
+
+    def test_a_file_with_no_video_stream_counts_zero(self, tmp_path: Path):
+        """Zero rather than an error, so the caller's own check reports it.
+
+        A cut that produced no video stream at all is a failed cut, and it
+        should be described as the wrong frame count like any other.
+        """
+        audio_only = tmp_path / "audio_only.m4a"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=1",
+                "-c:a",
+                "aac",
+                str(audio_only),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        assert written_frames(audio_only) == 0
+
+    def test_an_unreadable_file_raises(self, tmp_path: Path):
+        """A missing file is an error, not a count of zero."""
+        with pytest.raises(VpeMediaOpError):
+            written_frames(tmp_path / "nothing.mp4")
 
 
 class TestConcatSegments:

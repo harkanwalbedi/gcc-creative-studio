@@ -107,11 +107,19 @@ SEGMENT_TIMEOUT_SECONDS = 1800.0
 # much more likely to be a whole edit submitted by mistake.
 MAX_SEGMENTS_PER_JOB = 8
 
-# The frame count being over the maximum is the one blocking finding this
-# worker can answer, because splitting is exactly the remedy for it. Every
-# other block stands: a 30 fps clip, a 4K source or a 960x540 frame is not
-# something cutting the clip up will fix.
-_SEGMENTABLE_CODES = frozenset({VpeReasonCode.FRAME_COUNT_TOO_HIGH})
+# The two blocking findings this worker can answer for itself. Splitting is
+# the remedy for a frame count over the maximum. The cut is the remedy for an
+# unsupported source codec: every segment is re-encoded to H.264 on the way
+# out, so the API is never shown the codec the source arrived in, and a source
+# ffmpeg genuinely cannot decode fails in the cut instead - loudly, and before
+# anything has been submitted. Every other block stands: a 30 fps clip, a 4K
+# source or a 960x540 frame is not something cutting the clip up will fix.
+_SEGMENTABLE_CODES = frozenset(
+    {
+        VpeReasonCode.FRAME_COUNT_TOO_HIGH,
+        VpeReasonCode.MIME_TYPE_UNSUPPORTED,
+    },
+)
 
 
 class VpeJobError(RuntimeError):
@@ -375,21 +383,31 @@ def _process_vpe_upscale_in_background(  # noqa: PLR0915
                             aspect_ratio,
                         )
 
-                        # 3. Cut and upload every piece, then submit them all
-                        # before waiting on any. The wait is minutes and the
+                        # 3. Cut every piece before uploading any of them.
+                        # Cutting is local and free, submitting is neither, so
+                        # a cut that comes up short - a source whose container
+                        # over-declares its length - has to be found while the
+                        # only thing spent is time.
+                        pieces = []
+                        for segment in segments:
+                            pieces.append(
+                                await asyncio.to_thread(
+                                    cut_segment,
+                                    source_path,
+                                    work / f"in_{segment.index:02d}.mp4",
+                                    first_frame=segment.first_frame,
+                                    frames=segment.frames,
+                                    fps=int(probe.fps),
+                                ),
+                            )
+
+                        # 4. Upload every piece, then submit them all before
+                        # waiting on any. The wait is minutes and the
                         # submission is a round trip, so this is what lets the
                         # segments run concurrently.
                         prefix = f"vpe/upscale/{media_item_id}"
                         operations = []
-                        for segment in segments:
-                            piece = await asyncio.to_thread(
-                                cut_segment,
-                                source_path,
-                                work / f"in_{segment.index:02d}.mp4",
-                                first_frame=segment.first_frame,
-                                frames=segment.frames,
-                                fps=int(probe.fps),
-                            )
+                        for segment, piece in zip(segments, pieces):
                             segment_uri = await asyncio.to_thread(
                                 vpe_gcs.upload_file_to_gcs,
                                 local_path=str(piece),
@@ -422,7 +440,7 @@ def _process_vpe_upscale_in_background(  # noqa: PLR0915
                                 ),
                             )
 
-                        # 4. Record the operation names before blocking on
+                        # 5. Record the operation names before blocking on
                         # them. This is the whole recoverability story: the
                         # pool is shut down without waiting, so an
                         # interrupted worker loses its polling loop and
@@ -454,7 +472,7 @@ def _process_vpe_upscale_in_background(  # noqa: PLR0915
                             },
                         )
 
-                        # 5. Wait for each in turn. They are already running
+                        # 6. Wait for each in turn. They are already running
                         # side by side, so the cost is the slowest of them
                         # rather than the sum.
                         upscaled: list[Path] = []
@@ -486,7 +504,7 @@ def _process_vpe_upscale_in_background(  # noqa: PLR0915
                                 worker_logger,
                             )
 
-                        # 6. Rejoin, then lay the original sound back over
+                        # 7. Rejoin, then lay the original sound back over
                         # the result. A single segment skips the join: there
                         # is no seam to make and a stream copy would only
                         # cost a rewrite.
@@ -505,7 +523,7 @@ def _process_vpe_upscale_in_background(  # noqa: PLR0915
                             work / "master.mp4",
                         )
 
-                        # 7. Back into the app's bucket, where the gallery
+                        # 8. Back into the app's bucket, where the gallery
                         # can serve it.
                         destination = (
                             f"upscaled_videos/{media_item_id}_"
@@ -538,7 +556,7 @@ def _process_vpe_upscale_in_background(  # noqa: PLR0915
                                 mime_type="image/png",
                             )
 
-                        # 8. Measure the delivered master rather than
+                        # 9. Measure the delivered master rather than
                         # assuming it. The request asked for 4K; what the row
                         # should say is what came back.
                         measured_metadata = await asyncio.to_thread(

@@ -400,6 +400,13 @@ def probe_media(path: str) -> VpeMediaProbe:
     video_codec = _text(video.get("codec_name"))
     width = _int(video.get("width"))
     height = _int(video.get("height"))
+    # ffprobe reports the coded frame size, but a display matrix makes the
+    # decoder present it turned. ffmpeg autorotates by default, so the frames
+    # every later step cuts, uploads and pays for are the turned ones.
+    # Measuring the coded size would validate a geometry that is never the one
+    # sent, and would declare an aspect ratio the delivered pixels contradict.
+    if _quarter_turn(video):
+        width, height = height, width
     kind = _classify_video_stream(video, video_codec)
 
     if kind is VpeMediaKind.IMAGE:
@@ -1404,6 +1411,33 @@ def _frame_count(
     if fps and seconds:
         return max(1, round(seconds * float(fps))), False
     return None, False
+
+
+def _quarter_turn(stream: dict) -> bool:
+    """Reports whether a display matrix turns the frame onto its side.
+
+    Only a quarter turn swaps the axes. A half turn leaves the frame size
+    alone, and so is nothing this has to account for.
+
+    Args:
+        stream: The ffprobe video stream object.
+
+    Returns:
+        True if the measured width and height should be swapped.
+    """
+    for side_data in stream.get("side_data_list") or []:
+        rotation = side_data.get("rotation")
+        if rotation is None:
+            continue
+        try:
+            degrees = abs(int(round(float(rotation))))
+        except (TypeError, ValueError):
+            # A rotation that cannot be read is not a rotation that can be
+            # applied. Treating it as none matches what the decoder does.
+            continue
+        if degrees % 180 == 90:
+            return True
+    return False
 
 
 def _classify_video_stream(stream: dict, codec: str | None) -> VpeMediaKind:

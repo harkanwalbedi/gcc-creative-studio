@@ -144,6 +144,56 @@ class TestCheckUpscalable:
             check_upscalable(_probe(fps=25, frame_count=250))
         assert str(caught.value).strip()
 
+    def test_a_prores_source_passes(self):
+        """The other block the worker answers for itself.
+
+        Every segment is re-encoded to H.264 on the way out, so the API is
+        never shown the codec the source arrived in. Refusing here would
+        turn a clip this pipeline handles correctly into an error.
+        """
+        check_upscalable(
+            _probe(video_codec="prores", mime_type="video/quicktime"),
+        )
+
+    def test_a_prores_source_is_still_held_to_every_other_rule(self):
+        """Tolerating the codec must not tolerate anything alongside it.
+
+        A re-encode changes the codec and nothing else, so a 30 fps ProRes
+        clip is exactly as unusable as a 30 fps H.264 one.
+        """
+        with pytest.raises(VpeJobError, match="24"):
+            check_upscalable(
+                _probe(
+                    fps=30,
+                    frame_count=300,
+                    video_codec="prores",
+                    mime_type="video/quicktime",
+                ),
+            )
+
+    def test_a_still_image_is_refused(self):
+        """A file that is not a video is not a codec problem.
+
+        Both arrive as a mime type the capability does not accept, so this
+        is the case that proves the tolerance keys on the reason code rather
+        than on the mime check having fired at all.
+        """
+        # Built directly rather than through ``_probe``, which fills in the
+        # frame rate and sound a still does not have.
+        still = VpeMediaProbe(
+            path="/tmp/frame.png",
+            kind=VpeMediaKind.IMAGE,
+            container="png_pipe",
+            size_bytes=400_000,
+            width=1920,
+            height=1080,
+            frame_count=1,
+            mime_type="image/png",
+            video_codec="png",
+        )
+        with pytest.raises(VpeJobError, match="image"):
+            check_upscalable(still)
+
 
 class TestPlanUpscale:
     """How many jobs a clip turns into."""

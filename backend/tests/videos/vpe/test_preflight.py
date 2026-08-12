@@ -42,6 +42,7 @@ from typing import NamedTuple
 
 import pytest
 
+from src.videos.vpe import preflight
 from src.videos.vpe.capabilities import VpeCapabilityId, get_capability
 from src.videos.vpe.preflight import (
     VpeFrameOrientation,
@@ -590,6 +591,99 @@ def test_probe_rejects_a_missing_file():
 def test_probe_rejects_a_file_that_is_not_media(fixtures):
     with pytest.raises(VpeProbeError):
         probe_media(fixtures["notes.txt"])
+
+
+# --- probe_media, against a display matrix -------------------------------
+#
+# A quarter turn is the one condition that cannot be generated here. Writing
+# a display matrix takes ffmpeg's ``-display_rotation``, which arrived in
+# ffmpeg 6, while the backend image ships 5.1 - so a test built on a real
+# turned file would pass on a modern host and silently skip in the place
+# that matters. ``-metadata:s:v:0 rotate=90`` is not a substitute: it writes
+# a tag ffprobe does not report as side data and modern ffmpeg ignores.
+#
+# The turn is therefore added to a real file's real measurement. Everything
+# else in the document is whatever ffprobe produced, so what is under test
+# is the swap and the reading of the rotation, not a hand-built stand-in for
+# ffprobe.
+
+
+def _turned(monkeypatch, path: str, rotation) -> VpeMediaProbe:
+    """Measures a real file as though its video stream declared a rotation.
+
+    Args:
+        monkeypatch: pytest's patcher.
+        path: The file to measure.
+        rotation: Degrees to report in the display matrix, or None to report
+            no side data at all.
+
+    Returns:
+        The measurement.
+    """
+    real = preflight._run_ffprobe  # pylint: disable=protected-access
+
+    def with_rotation(target: str, extra_args: tuple[str, ...]) -> dict:
+        document = real(target, extra_args)
+        if rotation is None:
+            return document
+        for stream in document.get("streams") or []:
+            if stream.get("codec_type") == "video":
+                stream["side_data_list"] = [
+                    {
+                        "side_data_type": "Display Matrix",
+                        "rotation": rotation,
+                    },
+                ]
+        return document
+
+    monkeypatch.setattr(preflight, "_run_ffprobe", with_rotation)
+    return probe_media(path)
+
+
+# A float and a string because ffprobe has emitted the rotation as both.
+@pytest.mark.parametrize("rotation", [90, -90, 270, -270, 90.0, "-90"])
+def test_probe_swaps_the_axes_for_a_quarter_turn(
+    monkeypatch, fixtures, rotation
+):
+    probe = _turned(monkeypatch, fixtures["hd_1080p.mp4"], rotation)
+
+    # The file is coded 1920x1080. The decoder presents it turned, and so
+    # the frames every later step cuts, uploads and pays for are portrait.
+    assert (probe.width, probe.height) == (1080, 1920)
+    assert probe.orientation is VpeFrameOrientation.PORTRAIT
+
+
+@pytest.mark.parametrize("rotation", [None, 0, 180, -180, 360])
+def test_probe_leaves_the_axes_alone_without_a_quarter_turn(
+    monkeypatch, fixtures, rotation
+):
+    probe = _turned(monkeypatch, fixtures["hd_1080p.mp4"], rotation)
+
+    assert (probe.width, probe.height) == (1920, 1080)
+    assert probe.orientation is VpeFrameOrientation.LANDSCAPE
+
+
+def test_probe_ignores_a_rotation_it_cannot_read(monkeypatch, fixtures):
+    # A rotation that cannot be parsed is not a rotation that can be
+    # applied, so the measurement has to match what the decoder will do
+    # rather than fail on side data it did not expect.
+    probe = _turned(monkeypatch, fixtures["hd_1080p.mp4"], "sideways")
+
+    assert (probe.width, probe.height) == (1920, 1080)
+
+
+def test_a_turned_landscape_source_passes_the_portrait_capability(
+    monkeypatch, fixtures
+):
+    # The point of the swap: coded 1920x1080 is a legal landscape frame and
+    # an illegal portrait one, and a display matrix decides which of those
+    # the upscaler is actually sent.
+    probe = _turned(monkeypatch, fixtures["hd_1080p.mp4"], 90)
+
+    verdict = validate(probe, get_capability(VpeCapabilityId.UPSCALE))
+
+    assert not verdict.is_blocked
+    assert VpeReasonCode.FRAME_SIZE_UNSUPPORTED not in verdict.codes
 
 
 # --- validate, against real clips ---------------------------------------
