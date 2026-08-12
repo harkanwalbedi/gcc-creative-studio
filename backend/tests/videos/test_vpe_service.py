@@ -21,9 +21,14 @@ minutes into a paid job.
 """
 
 from fractions import Fraction
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from src.common.base_dto import MimeTypeEnum
+from src.config.config_service import config_service
+from src.users.user_model import UserModel, UserRoleEnum
+from src.videos.dto.upscale_video_dto import UpscaleVideoDto
 from src.videos.vpe.capabilities import VpeUpscaleResolution
 from src.videos.vpe.payloads import build_payload
 from src.videos.vpe.preflight import VpeMediaKind, VpeMediaProbe
@@ -31,6 +36,7 @@ from src.videos.vpe.segmentation import VpeSegmentationError
 from src.videos.vpe_service import (
     MAX_SEGMENTS_PER_JOB,
     VpeJobError,
+    VpeService,
     _blob_path,
     aspect_ratio_for,
     build_segment_request,
@@ -274,8 +280,6 @@ def _settings(
     Returns:
         The patched settings object.
     """
-    from src.config.config_service import config_service
-
     monkeypatch.setattr(config_service, "VPE_ENABLED", enabled)
     monkeypatch.setattr(config_service, "VPE_BUCKET", bucket)
     monkeypatch.setattr(config_service, "VPE_PROJECT_ID", project_id)
@@ -294,3 +298,96 @@ class TestBlobPath:
     def test_a_nested_path_survives_whole(self):
         """Only the first segment is the bucket."""
         assert _blob_path("gs://b/a/b/c/d.mp4") == "a/b/c/d.mp4"
+
+
+def _row(*, duration_seconds: float, resolution: str = "1K"):
+    """A stand-in for the row screening reads, needing only three fields."""
+    row = Mock()
+    row.mime_type = MimeTypeEnum.VIDEO_MP4
+    row.duration_seconds = duration_seconds
+    row.resolution = resolution
+    row.workspace_id = 1
+    row.gcs_uris = ["gs://bucket/source.mp4"]
+    row.aspect_ratio = "16:9"
+    return row
+
+
+class TestScreenMediaItem:
+    """The service method a click on a gallery row actually calls.
+
+    This is the layer gating.py's own tests cannot reach: it is what would
+    have caught a screening call built without max_segments, since that bug
+    lived entirely in what this method passed through, not in
+    screen_stored_video itself.
+    """
+
+    @pytest.mark.anyio
+    async def test_a_ten_second_clip_is_offered(self):
+        """The customer's real case: 10s, split-and-rejoin covers it.
+
+        Regression test: screen_media_item once called screen_stored_video
+        with no max_segments, so this exact row was ruled out and the
+        gallery button never appeared - even though the worker behind it
+        has been proven live to handle this duration correctly.
+        """
+        media_repo = AsyncMock()
+        media_repo.get_by_id = AsyncMock(
+            return_value=_row(duration_seconds=10.0),
+        )
+        service = VpeService(media_repo=media_repo, gcs_service=AsyncMock())
+
+        result = await service.screen_media_item(7)
+
+        assert result.offer is True
+
+    @pytest.mark.anyio
+    async def test_a_clip_beyond_every_segment_is_still_ruled_out(self):
+        """Segmentation credit is not unlimited."""
+        too_long = 8.0 * (MAX_SEGMENTS_PER_JOB + 1)
+        media_repo = AsyncMock()
+        media_repo.get_by_id = AsyncMock(
+            return_value=_row(duration_seconds=too_long),
+        )
+        service = VpeService(media_repo=media_repo, gcs_service=AsyncMock())
+
+        result = await service.screen_media_item(7)
+
+        assert result.offer is False
+
+
+class TestStartUpscaleJob:
+    """The endpoint's own entry point, screening included."""
+
+    @pytest.mark.anyio
+    async def test_a_ten_second_clip_is_queued_not_refused(self, monkeypatch):
+        """Regression test for the same gap, at the actual submit path.
+
+        Before max_segments was threaded through, this call raised a 400
+        for every real production shot longer than 8 seconds - the exact
+        majority case split-and-rejoin exists to cover - because screening
+        ran ahead of the worker's own, correct forgiveness of a long clip.
+        """
+        monkeypatch.setattr(config_service, "VPE_ENABLED", True)
+        monkeypatch.setattr(config_service, "VPE_BUCKET", "vpe-bucket")
+        monkeypatch.setattr(config_service, "VPE_PROJECT_ID", "vpe-project")
+        media_repo = AsyncMock()
+        media_repo.get_by_id = AsyncMock(
+            return_value=_row(duration_seconds=10.0),
+        )
+        media_repo.create = AsyncMock(side_effect=lambda item: item)
+        service = VpeService(media_repo=media_repo, gcs_service=AsyncMock())
+        user = UserModel(
+            id=1,
+            email="user@example.com",
+            name="Test User",
+            roles=[UserRoleEnum.USER],
+        )
+        request_dto = UpscaleVideoDto(workspace_id=1, media_item_id=7)
+
+        placeholder = await service.start_upscale_job(
+            request_dto=request_dto,
+            user=user,
+            executor=Mock(),
+        )
+
+        assert placeholder.status == "processing"

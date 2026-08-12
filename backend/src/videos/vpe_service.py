@@ -693,6 +693,11 @@ class VpeService:
             get_capability(capability_id),
             duration_seconds=item.duration_seconds,
             resolution=item.resolution,
+            max_segments=(
+                MAX_SEGMENTS_PER_JOB
+                if capability_id == VpeCapabilityId.UPSCALE
+                else 1
+            ),
         )
 
     async def start_upscale_job(
@@ -749,6 +754,7 @@ class VpeService:
             get_capability(VpeCapabilityId.UPSCALE),
             duration_seconds=item.duration_seconds,
             resolution=item.resolution,
+            max_segments=MAX_SEGMENTS_PER_JOB,
         )
         if not screening.offer:
             raise HTTPException(

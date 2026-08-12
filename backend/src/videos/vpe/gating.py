@@ -150,6 +150,7 @@ def screen_stored_video(
     *,
     duration_seconds: float | None,
     resolution: str | None,
+    max_segments: int = 1,
 ) -> VpeScreeningResult:
     """Screens a stored video row against a capability's input rules.
 
@@ -157,6 +158,13 @@ def screen_stored_video(
         capability: The capability to screen against.
         duration_seconds: The row's measured duration, or None if unmeasured.
         resolution: The row's stored resolution name, or None if unmeasured.
+        max_segments: How many pieces a caller can split this clip into
+            before running it, widening the duration ceiling by that many
+            multiples of the capability's own maximum. Left at 1 - no
+            splitting credit - for any capability that has no split-and-
+            rejoin worker behind it, which is every capability but the
+            upscaler today. A short clip gets no such credit either way:
+            no number of pieces makes a clip longer.
 
     Returns:
         The screening outcome and the findings behind it.
@@ -194,9 +202,15 @@ def screen_stored_video(
         # a rounding artefact. Anything within half a frame of legal is left
         # for preflight to count exactly.
         slack = 0.5 / constraints.fps
-        window = f"{constraints.min_seconds:g}-{constraints.max_seconds:g}s"
+        max_span = constraints.max_seconds * max_segments
+        window = (
+            f"{constraints.min_seconds:g}-{constraints.max_seconds:g}s"
+            if max_segments <= 1
+            else f"{constraints.min_seconds:g}-{max_span:g}s"
+            f" split across up to {max_segments} segments"
+        )
         too_short = duration_seconds < constraints.min_seconds - slack
-        too_long = duration_seconds > constraints.max_seconds + slack
+        too_long = duration_seconds > max_span + slack
         if too_short or too_long:
             findings.append(
                 VpeFinding(
@@ -207,16 +221,17 @@ def screen_stored_video(
                     ),
                     severity=VpeSeverity.BLOCK,
                     message=(
-                        f"{capability.label} accepts"
-                        f" {constraints.min_seconds:g}-"
-                        f"{constraints.max_seconds:g} second clips,"
+                        f"{capability.label} accepts {window},"
                         f" and this one is {duration_seconds:g} seconds."
                     ),
                     # A long clip has a way out and a short one does not, so
-                    # they get different advice rather than one hedged line.
+                    # they get different advice rather than one hedged line -
+                    # unless splitting is already priced into the window
+                    # above and still is not enough, in which case there is
+                    # nothing left to suggest.
                     remedy=(
                         "Split the clip into segments inside the window."
-                        if too_long
+                        if too_long and max_segments <= 1
                         else ""
                     ),
                     measured=f"{duration_seconds:g}s",

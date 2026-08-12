@@ -31,12 +31,14 @@ from src.videos.vpe.preflight import VpeReasonCode
 _UPSCALE = get_capability(VpeCapabilityId.UPSCALE)
 
 
-def _screen(duration: float | None, resolution: str | None):
+def _screen(duration: float | None, resolution: str | None, **kwargs):
     """Screens a row against the upscaler.
 
     Args:
         duration: Stored duration in seconds, or None.
         resolution: Stored resolution name, or None.
+        **kwargs: Passed through to ``screen_stored_video``, e.g.
+            ``max_segments``.
 
     Returns:
         The screening result.
@@ -45,6 +47,7 @@ def _screen(duration: float | None, resolution: str | None):
         _UPSCALE,
         duration_seconds=duration,
         resolution=resolution,
+        **kwargs,
     )
 
 
@@ -59,8 +62,14 @@ class TestAcceptedResolutionNames:
 class TestDurationScreening:
     """Duration is the one rule the row can answer soundly."""
 
-    def test_a_ten_second_clip_is_ruled_out(self):
-        """The customer's real case: 240 frames against a 4-8s window."""
+    def test_a_ten_second_clip_is_ruled_out_with_no_segmentation_credit(self):
+        """240 frames against a bare 4-8s window, with no split behind it.
+
+        This is the default - max_segments=1 - and it is what every other
+        VPE capability actually gets, since none of them has a worker that
+        splits and rejoins. It is not the upscaler's own real behaviour;
+        see TestSegmentationAwareScreening for that.
+        """
         result = _screen(10.0, "1K")
         assert result.screening is VpeScreening.RULED_OUT
         assert result.offer is False
