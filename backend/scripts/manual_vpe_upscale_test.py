@@ -52,6 +52,13 @@ if str(_REPO_BACKEND) not in sys.path:
     sys.path.insert(0, str(_REPO_BACKEND))
 
 # pylint: disable=wrong-import-position
+# Importing the app module - and nothing about it beyond the import - registers
+# every SQLAlchemy model on Base.metadata, the same way running the real app
+# does. Without it, MediaItemModel's own foreign key to media_templates cannot
+# be resolved at insert time: this script never otherwise imports that model,
+# so SQLAlchemy has no table to point the constraint at. Only the import
+# matters, so it is aliased out of the way of this module's own main().
+import main as _app  # noqa: F401  # pylint: disable=unused-import
 from src.common.base_dto import (
     AspectRatioEnum,
     GenerationModelEnum,
