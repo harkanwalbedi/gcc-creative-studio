@@ -1,0 +1,19 @@
+{
+  "clip": "../2_4k.mp4",
+  "boundaries": [
+    120
+  ],
+  "verdict": "INVISIBLE",
+  "reading": "Every seam sits inside the normal frame-to-frame variation of this footage. Split-and-rejoin is viable.",
+  "worst_seam_times_p95": 1.19,
+  "baseline_median": 0.768,
+  "baseline_p95": 1.7249,
+  "baseline_samples": 238,
+  "seams": [
+    {
+      "frame": 120,
+      "delta": 2.0486,
+      "times_p95": 1.19
+    }
+  ]
+}

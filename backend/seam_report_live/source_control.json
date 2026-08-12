@@ -1,0 +1,10 @@
+{
+  "source": "8994494215388068422.mp4",
+  "master": "2_4k.mp4",
+  "cut_transition": 119,
+  "source_rank": 68,
+  "master_rank": 2,
+  "transitions": 239,
+  "join_amplification": 1.616,
+  "ordinary_amplification_median": 0.985
+}
