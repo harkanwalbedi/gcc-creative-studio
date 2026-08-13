@@ -61,6 +61,7 @@ class VpeStatusCode(int, Enum):
     INVALID_ARGUMENT = 3
     PERMISSION_DENIED = 7
     RESOURCE_EXHAUSTED = 8
+    UNAVAILABLE = 14
     UNAUTHENTICATED = 16
     HTTP_UNAUTHORIZED = 401
 
@@ -752,6 +753,9 @@ def classify_error(
     if (
         _HIGH_LOAD_RE.search(message)
         or code == VpeStatusCode.RESOURCE_EXHAUSTED
+        or code == VpeStatusCode.UNAVAILABLE
+        or status == "UNAVAILABLE"
+        or "currently unavailable" in message.lower()
     ):
         return _classify_high_load(message, preflight, common)
 

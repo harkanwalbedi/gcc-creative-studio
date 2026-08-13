@@ -183,6 +183,13 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
     {value: 'audio/*', label: 'Audio'},
   ];
 
+  public statusOptions: DropdownOption[] = [
+    {value: JobStatus.COMPLETED, label: 'Completed'},
+    {value: JobStatus.PROCESSING, label: 'Running / Processing'},
+    {value: JobStatus.FAILED, label: 'Failed'},
+    {value: '', label: 'All Statuses'},
+  ];
+
   public get modelOptions(): DropdownOption[] {
     let filteredModels = MODEL_CONFIGS;
 

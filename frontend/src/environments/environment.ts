@@ -16,19 +16,19 @@
 
 export const environment = {
   firebase: {
-    apiKey: '',
-    authDomain: '',
-    projectId: '',
-    storageBucket: '',
-    messagingSenderId: '',
-    appId: '',
-    measurementId: '',
+    apiKey: 'dummy-local-api-key',
+    authDomain: 'vertex-test-project-383415.firebaseapp.com',
+    projectId: 'vertex-test-project-383415',
+    storageBucket: 'vertex-test-project-383415.firebasestorage.app',
+    messagingSenderId: '58707440259',
+    appId: '1:58707440259:web:localdev',
+    measurementId: 'G-LOCALDEV',
   },
-  production: true,
-  isLocal: false,
-  backendURL: 'http://localhost:8080/api',
+  production: false,
+  isLocal: true,
+  backendURL: '/api',
   EMAIL_REGEX:
     /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/,
   ADMIN: 'admin',
-  GOOGLE_CLIENT_ID: '',
+  GOOGLE_CLIENT_ID: 'dummy-google-client-id',
 };

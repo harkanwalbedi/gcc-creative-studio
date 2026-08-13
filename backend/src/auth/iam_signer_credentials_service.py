@@ -17,6 +17,7 @@
 import datetime
 import logging
 from os import getenv
+from urllib.parse import quote
 
 from google.auth import credentials
 from google.cloud import iam_credentials_v1, storage
@@ -111,7 +112,7 @@ class IamSignerCredentials(credentials.Signing):
 
         # Get the service account email from an environment variable.
         if not self.service_account_email:
-            return gcs_uri
+            return f"/api/media/stream?gcs_uri={quote(gcs_uri, safe='')}"
 
         try:
             # 2. Parse the GCS URI and create a blob object.
@@ -135,10 +136,12 @@ class IamSignerCredentials(credentials.Signing):
             self._set_cached_url(gcs_uri, expiration_hours, url)
             return url
         except Exception as e:
-            logger.error(
-                "Error generating presigned URL for %s: %s", gcs_uri, e
+            logger.warning(
+                "Could not generate presigned URL for %s (%s). Falling back to media stream proxy.",
+                gcs_uri,
+                e,
             )
-            return gcs_uri
+            return f"/api/media/stream?gcs_uri={quote(gcs_uri, safe='')}"
 
     def generate_v4_upload_signed_url(
         self,

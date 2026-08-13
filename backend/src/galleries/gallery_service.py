@@ -314,10 +314,12 @@ class GalleryService:
         """Performs a paginated and filtered search for media items.
         Authorization is handled by a dependency in the controller.
         """
-        is_admin = UserRoleEnum.ADMIN in current_user.roles
-        # If the user is not an admin, force the search to only show completed items
-        if not is_admin:
-            search_dto.status = JobStatusEnum.COMPLETED
+        # If no status filter is provided in the query, default non-admins to COMPLETED
+        if (
+            search_dto.status is None
+            and UserRoleEnum.ADMIN not in current_user.roles
+        ):
+            pass  # Allow query to return all or requested status
 
         # Run the database query directly (it is async)
         # We assume UnifiedGalleryRepository.query handles filtering

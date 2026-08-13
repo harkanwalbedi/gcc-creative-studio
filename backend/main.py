@@ -17,19 +17,20 @@ from src.config.logger_config import setup_logging
 
 setup_logging()
 
+import asyncio
 import logging
 
 logger = logging.getLogger(__name__)
-# Register SQLAlchemy event listeners
-from src.common import events  # noqa: F401
-
+import mimetypes
+import re
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from os import getenv
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from google.cloud import storage
 
 from src.admin.admin_controller import router as admin_router
 from src.audios.audio_controller import router as audio_router
@@ -184,6 +185,91 @@ async def root():
 @app.get("/api/version", tags=["Health Check"])
 def version():
     return "v0.0.1"
+
+
+@app.get("/api/media/stream", tags=["Media Proxy"])
+async def stream_media(gcs_uri: str, request: Request):
+    """Streams a GCS media asset directly to the browser with Range support."""
+    if not gcs_uri.startswith("gs://"):
+        raise HTTPException(status_code=400, detail="Invalid GCS URI")
+
+    try:
+        bucket_name, blob_name = gcs_uri.replace("gs://", "").split("/", 1)
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(bucket_name)
+        blob = bucket.blob(blob_name)
+
+        exists = await asyncio.to_thread(blob.exists)
+        if not exists:
+            raise HTTPException(
+                status_code=404, detail="Media object not found in GCS"
+            )
+
+        await asyncio.to_thread(blob.reload)
+        content_type = (
+            blob.content_type
+            or mimetypes.guess_type(blob_name)[0]
+            or "application/octet-stream"
+        )
+        size = blob.size or 0
+
+        range_header = request.headers.get("range")
+        if range_header and size > 0:
+            range_match = re.match(r"bytes=(\d+)-(\d*)", range_header)
+            if range_match:
+                start = int(range_match.group(1))
+                end = (
+                    int(range_match.group(2))
+                    if range_match.group(2)
+                    else size - 1
+                )
+                length = end - start + 1
+
+                def iter_range():
+                    with blob.open("rb") as f:
+                        f.seek(start)
+                        remaining = length
+                        while remaining > 0:
+                            chunk_size = min(remaining, 64 * 1024)
+                            data = f.read(chunk_size)
+                            if not data:
+                                break
+                            remaining -= len(data)
+                            yield data
+
+                headers = {
+                    "Content-Range": f"bytes {start}-{end}/{size}",
+                    "Accept-Ranges": "bytes",
+                    "Content-Length": str(length),
+                    "Content-Type": content_type,
+                    "Cache-Control": "public, max-age=86400",
+                }
+                return StreamingResponse(
+                    iter_range(), status_code=206, headers=headers
+                )
+
+        def iter_all():
+            with blob.open("rb") as f:
+                while True:
+                    chunk = f.read(64 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+
+        headers = {
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(size),
+            "Content-Type": content_type,
+            "Cache-Control": "public, max-age=86400",
+        }
+        return StreamingResponse(iter_all(), headers=headers)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to stream media: {e}"
+        ) from e
 
 
 configure_cors(app)

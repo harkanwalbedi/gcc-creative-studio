@@ -56,7 +56,11 @@ export class LoginComponent {
     });
   }
 
-  ngOnInit(): void {}
+  ngOnInit(): void {
+    if (this.isBrowser && this.authService.isLoggedIn()) {
+      void this.router.navigate([HOME_ROUTE]);
+    }
+  }
 
   loginWithGoogle() {
     this.loader = true;
@@ -74,7 +78,7 @@ export class LoginComponent {
             void this.router.navigate([HOME_ROUTE]);
           });
         },
-        error: error => {
+        error: (error: any) => {
           this.loader = false;
           console.log(error);
           // Handle specific errors from the auth service
@@ -105,7 +109,7 @@ export class LoginComponent {
             void this.router.navigate([HOME_ROUTE]);
           });
         },
-        error: error => {
+        error: (error: any) => {
           this.loader = false;
           console.log(error);
           // Handle specific errors from the auth service

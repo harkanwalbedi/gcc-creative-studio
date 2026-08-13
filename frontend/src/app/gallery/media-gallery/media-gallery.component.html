@@ -156,7 +156,13 @@
             <div class="flex flex-col w-48">
               <studio-dropdown class="w-full" size="small" [options]="assetTypeOptions" [(value)]="assetTypeFilter"
                 (valueChange)="searchTerm()" placeholder="Asset Type" menuTitle="Asset Type"></studio-dropdown>
-              </div>
+            </div>
+
+            <!-- Status Filter -->
+            <div class="flex flex-col w-48">
+              <studio-dropdown class="w-full" size="small" [options]="statusOptions" [(value)]="statusFilter"
+                (valueChange)="searchTerm()" placeholder="Status" menuTitle="Status"></studio-dropdown>
+            </div>
 
             <!-- Tags Filter -->
             <div class="flex items-center gap-2 w-56">

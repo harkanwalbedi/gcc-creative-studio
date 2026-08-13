@@ -132,7 +132,11 @@ export class MediaLightboxComponent
    * the worker falls back to sending the clip itself.
    */
   get hasStoredClip(): boolean {
-    return !!this.mediaItem?.gcsUris?.[this.selectedIndex];
+    return !!(
+      this.mediaItem?.gcsUris?.[this.selectedIndex] ||
+      (this.mediaItem as any)?.gcsUri ||
+      (this.mediaItem?.gcsUris && this.mediaItem.gcsUris.length > 0)
+    );
   }
 
   @Output() editClicked = new EventEmitter<number>();

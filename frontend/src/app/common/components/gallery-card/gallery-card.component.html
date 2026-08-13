@@ -112,6 +112,20 @@
       ></div>
     </ng-container>
 
+    <!-- Processing or Failed state for video/image without generated URL -->
+    <ng-container *ngIf="displayUrls.length === 0 && !item.mimeType?.startsWith('audio/')">
+      <div class="media-element flex flex-col items-center justify-center p-4 text-center bg-neutral-900/90 rounded-2xl w-full h-full border border-neutral-700/60 z-[1]">
+        <mat-progress-spinner *ngIf="item.status === 'processing'" mode="indeterminate" diameter="36" class="mb-3"></mat-progress-spinner>
+        <mat-icon *ngIf="item.status === 'failed'" class="text-red-400 mb-2 !w-8 !h-8 !text-[32px]">error_outline</mat-icon>
+        <span class="text-sm font-semibold text-white capitalize">{{ item.status || 'Processing' }}</span>
+        <span class="text-xs text-neutral-400 mt-1 line-clamp-2">{{ getShortPrompt(item.prompt || item.originalPrompt || item.model || 'Generating...') }}</span>
+      </div>
+      <div
+        class="spacer"
+        [style.padding-bottom]="displayPaddingBottom"
+      ></div>
+    </ng-container>
+
     <!-- Glassmorphism Overlay -->
     <app-gallery-item-overlay
       [itemType]="item.itemType"

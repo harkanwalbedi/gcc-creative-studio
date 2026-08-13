@@ -222,11 +222,7 @@ export class MediaDetailComponent implements OnDestroy {
   private fetchVpeScreening(): void {
     this.vpeScreening = undefined;
     const isVideo = this.mediaItem?.mimeType?.startsWith('video/') ?? false;
-    if (
-      !this.mediaItem ||
-      this.mediaItem.itemType !== 'media_item' ||
-      !isVideo
-    ) {
+    if (!this.mediaItem || !isVideo) {
       return;
     }
 

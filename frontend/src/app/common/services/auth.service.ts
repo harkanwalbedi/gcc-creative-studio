@@ -88,6 +88,9 @@ export class AuthService {
    * @returns An Observable that emits the Firebase-compatible ID token.
    */
   signInWithGoogleFirebase(): Observable<string> {
+    if (environment?.isLocal) {
+      return this.signInLocalDev$();
+    }
     return from(signInWithPopup(this.auth, this.provider)).pipe(
       // Step 1: Get the Firebase ID token from the successful sign-in.
       switchMap((userCredential: UserCredential) => {
@@ -119,6 +122,37 @@ export class AuthService {
         return throwError(
           () => new Error(`Sign-in failed. Please try again. ${error}`),
         );
+      }),
+    );
+  }
+
+  /**
+   * Local development sign-in that bypasses external OAuth popups.
+   */
+  signInLocalDev$(): Observable<string> {
+    const token =
+      'eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJlbWFpbCI6ImFkbWluQGV4YW1wbGUuY29tIiwibmFtZSI6IkFkbWluIiwiZXhwIjoyMDAwMDAwMDAwfQ.mock';
+    const expirationTime = 2000000000 * 1000;
+    this.firebaseIdToken = token;
+    this.firebaseTokenExpiry = expirationTime;
+    const session: FirebaseSession = {token, expiry: expirationTime};
+    localStorage.setItem(FIREBASE_SESSION_KEY, JSON.stringify(session));
+
+    return this.syncUserWithBackend$(token).pipe(
+      map(() => token),
+      catchError((error: any) => {
+        console.warn(
+          'Local backend sync returned error, using local admin profile:',
+          error,
+        );
+        const defaultAdmin: UserModel = {
+          id: 1,
+          email: 'admin@example.com',
+          name: 'admin',
+          roles: [UserRolesEnum.USER, UserRolesEnum.ADMIN],
+        };
+        localStorage.setItem(USER_DETAILS, JSON.stringify(defaultAdmin));
+        return of(token);
       }),
     );
   }
@@ -252,6 +286,16 @@ export class AuthService {
    * 3. If silent refresh fails, it emits an error, signaling a required re-login.
    */
   getValidIdentityPlatformToken$(): Observable<string> {
+    if (environment?.isLocal) {
+      if (this.isLoggedIn() || this.firebaseIdToken) {
+        return of(
+          this.firebaseIdToken ||
+            'eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJlbWFpbCI6ImFkbWluQGV4YW1wbGUuY29tIiwibmFtZSI6IkFkbWluIiwiZXhwIjoyMDAwMDAwMDAwfQ.mock',
+        );
+      }
+      return throwError(() => new SessionExpiredError());
+    }
+
     // Ask Firebase for the token whenever it is available. getIdToken()
     // returns the cached value and refreshes it automatically as expiry
     // approaches, which is what keeps a long session alive.

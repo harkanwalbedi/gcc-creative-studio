@@ -65,6 +65,9 @@ from src.common.storage_service import GcsService
 from src.config.config_service import ConfigService, config_service
 from src.galleries.dto.gallery_response_dto import MediaItemResponse
 from src.images.repository.media_item_repository import MediaRepository
+from src.source_assets.repository.source_asset_repository import (
+    SourceAssetRepository,
+)
 from src.users.user_model import UserModel
 from src.videos.dto.upscale_video_dto import UpscaleVideoDto
 from src.videos.veo_service import (
@@ -406,6 +409,7 @@ def _process_vpe_upscale_in_background(  # noqa: PLR0915
                         # submission is a round trip, so this is what lets the
                         # segments run concurrently.
                         prefix = f"vpe/upscale/{media_item_id}"
+                        requests = []
                         operations = []
                         for segment, piece in zip(segments, pieces):
                             segment_uri = await asyncio.to_thread(
@@ -433,6 +437,7 @@ def _process_vpe_upscale_in_background(  # noqa: PLR0915
                                 resolution=resolution,
                                 sharpness=sharpness,
                             )
+                            requests.append(request)
                             operations.append(
                                 await asyncio.to_thread(
                                     client.submit,
@@ -472,32 +477,69 @@ def _process_vpe_upscale_in_background(  # noqa: PLR0915
                             },
                         )
 
-                        # 6. Wait for each in turn. They are already running
-                        # side by side, so the cost is the slowest of them
-                        # rather than the sum.
+                        # 6. Wait for each in turn with automatic retries for
+                        # transient capacity or high load errors.
                         upscaled: list[Path] = []
-                        for segment, operation in zip(segments, operations):
-                            result = await asyncio.to_thread(
-                                client.wait_for_completion_sync,
-                                operation,
-                                timeout_seconds=SEGMENT_TIMEOUT_SECONDS,
-                            )
-                            local = work / f"out_{segment.index:02d}.mp4"
-                            fetched = await asyncio.to_thread(
-                                vpe_gcs.download_from_gcs,
-                                gcs_uri_path=_blob_path(
-                                    result.primary_video.gcs_uri,
-                                ),
-                                destination_file_path=str(local),
-                            )
-                            if not fetched:
-                                raise VpeJobError(
-                                    "Segment"
-                                    f" {segment.index} finished but its"
-                                    " output could not be downloaded from"
-                                    f" {result.primary_video.gcs_uri}.",
-                                )
-                            upscaled.append(local)
+                        for segment, operation, request in zip(
+                            segments, operations, requests
+                        ):
+                            max_retries = 3
+                            current_op = operation
+                            for attempt in range(max_retries):
+                                try:
+                                    result = await asyncio.to_thread(
+                                        client.wait_for_completion_sync,
+                                        current_op,
+                                        timeout_seconds=SEGMENT_TIMEOUT_SECONDS,
+                                    )
+                                    local = (
+                                        work / f"out_{segment.index:02d}.mp4"
+                                    )
+                                    fetched = await asyncio.to_thread(
+                                        vpe_gcs.download_from_gcs,
+                                        gcs_uri_path=_blob_path(
+                                            result.primary_video.gcs_uri,
+                                        ),
+                                        destination_file_path=str(local),
+                                    )
+                                    if not fetched:
+                                        raise VpeJobError(
+                                            "Segment"
+                                            f" {segment.index} finished but its"
+                                            " output could not be downloaded from"
+                                            f" {result.primary_video.gcs_uri}.",
+                                        )
+                                    upscaled.append(local)
+                                    break
+                                except Exception as err:
+                                    is_retryable = (
+                                        getattr(err, "retryable", False)
+                                        or "unavailable" in str(err).lower()
+                                        or "overloaded" in str(err).lower()
+                                        or "resource exhausted"
+                                        in str(err).lower()
+                                        or "high load" in str(err).lower()
+                                    )
+                                    if (
+                                        is_retryable
+                                        and attempt < max_retries - 1
+                                    ):
+                                        backoff = (attempt + 1) * 15
+                                        worker_logger.warning(
+                                            "Segment %d failed with retryable error (%s). Retrying in %ds (attempt %d/%d)...",
+                                            segment.index,
+                                            err,
+                                            backoff,
+                                            attempt + 1,
+                                            max_retries,
+                                        )
+                                        await asyncio.sleep(backoff)
+                                        current_op = await asyncio.to_thread(
+                                            client.submit,
+                                            build_payload(request),
+                                        )
+                                        continue
+                                    raise
                             await record_worker_progress(
                                 media_repo,
                                 media_item_id,
@@ -665,15 +707,18 @@ class VpeService:
     def __init__(
         self,
         media_repo: MediaRepository = Depends(),
+        source_asset_repo: SourceAssetRepository = Depends(),
         gcs_service: GcsService = Depends(),
     ):
         """Initializes the service with its dependencies.
 
         Args:
             media_repo: Repository owning gallery rows.
+            source_asset_repo: Repository owning source/template asset rows.
             gcs_service: Storage service for the application's own bucket.
         """
         self.media_repo = media_repo
+        self.source_asset_repo = source_asset_repo
         self.gcs_service = gcs_service
 
     async def screen_media_item(
@@ -699,18 +744,29 @@ class VpeService:
             HTTPException: If the row does not exist or is not a video.
         """
         item = await self.media_repo.get_by_id(media_item_id)
-        if not item or item.mime_type != MimeTypeEnum.VIDEO_MP4:
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    f"MediaItem '{media_item_id}' not found or is not a"
-                    " video."
-                ),
-            )
+        if item and item.mime_type == MimeTypeEnum.VIDEO_MP4:
+            duration_seconds = item.duration_seconds
+            resolution = item.resolution
+        else:
+            source_asset = await self.source_asset_repo.get_by_id(media_item_id)
+            if (
+                source_asset
+                and source_asset.mime_type == MimeTypeEnum.VIDEO_MP4
+            ):
+                duration_seconds = None
+                resolution = None
+            else:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"Video '{media_item_id}' not found or is not a video."
+                    ),
+                )
+
         return screen_stored_video(
             get_capability(capability_id),
-            duration_seconds=item.duration_seconds,
-            resolution=item.resolution,
+            duration_seconds=duration_seconds,
+            resolution=resolution,
             max_segments=(
                 MAX_SEGMENTS_PER_JOB
                 if capability_id == VpeCapabilityId.UPSCALE
@@ -745,23 +801,40 @@ class VpeService:
             raise HTTPException(status_code=503, detail=str(error)) from error
 
         item = await self.media_repo.get_by_id(request_dto.media_item_id)
-        if not item or item.mime_type != MimeTypeEnum.VIDEO_MP4:
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    f"MediaItem '{request_dto.media_item_id}' not found or is"
-                    " not a video."
-                ),
+        if item and item.mime_type == MimeTypeEnum.VIDEO_MP4:
+            if not item.gcs_uris or request_dto.media_index >= len(
+                item.gcs_uris
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"MediaItem '{request_dto.media_item_id}' has no clip at"
+                        f" index {request_dto.media_index}."
+                    ),
+                )
+            source_gcs_uri = item.gcs_uris[request_dto.media_index]
+            duration_seconds = item.duration_seconds
+            resolution = item.resolution
+            aspect_ratio = item.aspect_ratio
+        else:
+            source_asset = await self.source_asset_repo.get_by_id(
+                request_dto.media_item_id
             )
-        if not item.gcs_uris or request_dto.media_index >= len(item.gcs_uris):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"MediaItem '{request_dto.media_item_id}' has no clip at"
-                    f" index {request_dto.media_index}."
-                ),
-            )
-        source_gcs_uri = item.gcs_uris[request_dto.media_index]
+            if (
+                not source_asset
+                or source_asset.mime_type != MimeTypeEnum.VIDEO_MP4
+            ):
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"Video asset '{request_dto.media_item_id}' not found or is"
+                        " not a video."
+                    ),
+                )
+            source_gcs_uri = source_asset.gcs_uri
+            duration_seconds = None
+            resolution = None
+            aspect_ratio = source_asset.aspect_ratio
 
         # The screening here is the same one the gallery used to decide
         # whether to offer the action. Repeating it costs a comparison and
@@ -770,8 +843,8 @@ class VpeService:
         # record a frame rate.
         screening = screen_stored_video(
             get_capability(VpeCapabilityId.UPSCALE),
-            duration_seconds=item.duration_seconds,
-            resolution=item.resolution,
+            duration_seconds=duration_seconds,
+            resolution=resolution,
             max_segments=MAX_SEGMENTS_PER_JOB,
         )
         if not screening.offer:
@@ -801,8 +874,8 @@ class VpeService:
             ],
             gcs_uris=[],
             thumbnail_uris=[],
-            aspect_ratio=item.aspect_ratio,
-            duration_seconds=item.duration_seconds,
+            aspect_ratio=aspect_ratio,
+            duration_seconds=duration_seconds,
         )
         placeholder_item = await self.media_repo.create(placeholder_item)
 
