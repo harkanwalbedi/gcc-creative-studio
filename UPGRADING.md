@@ -348,3 +348,161 @@ that prefix is worth considering.
   generation**, so a user selecting x4 spends four times as much.
 - Video is delivered to Cloud Storage by URI rather than inline, removing a size ceiling that
   affected longer clips.
+
+## Compatibility notes for the VPE changes
+
+VPE adds video upscaling to the gallery. It is **off by default and inert until configured**, so
+upgrading changes nothing for a deployment that does not opt in — the routes still exist, but
+every one of them refuses before doing any work.
+
+### Turning it on for the first time, in order
+
+Each step is expanded below. Steps 1 and 2 are prerequisites you cannot work around; the rest is
+about fifteen minutes.
+
+1. **Confirm the project is allowlisted** for `veo-experimental`, with the VPE programme. Nothing
+   else in this list matters until it is.
+2. **Provoke `gcp-sa-vertex-tune` into existing**, once, from the Console: **Vertex AI → Tuning →
+   Create tuned model**, start it, cancel it immediately. This cannot be scripted.
+3. **Run the bootstrap script** (below). It does everything else in the project, is idempotent,
+   and prints the settings filled in.
+4. **Add the settings to `be_env_vars`** in your environment's `.tfvars`, under `common` or the
+   specific environment. This is the step nothing else hints at — the backend reads them as plain
+   Cloud Run environment variables, and they are wired through `be_env_vars` → `platform` →
+   `container_env_vars`.
+5. **`terraform apply`, then deploy the backend and frontend** as you normally would.
+6. **Verify** by opening a 24 fps clip in the gallery and checking the Upscale button is enabled.
+
+To try it locally before any of that, the same keys go in `backend/.env` — the backend reads that
+file directly, and the names are case-sensitive.
+
+### No data changes
+
+- **No new migrations.** `veo3p1_upscale` is stored in a plain `String` column and the
+  `upscale_source` role in JSON, so neither needs a Postgres enum change. `alembic upgrade head`
+  will report nothing new from this branch.
+- **Existing media items are untouched.** An upscale writes a new row and never rewrites its
+  source.
+
+### You cannot enable this without being allowlisted
+
+The `veo-experimental` endpoint is gated **per calling project**. This is not an IAM problem you
+can solve from your side: the project has to be added to the allowlist by the VPE programme.
+Until it is, the calls fail in a way that looks like an ordinary permission error.
+
+Note also that `VPE_LOCATION` is deliberately separate from the app's existing `LOCATION`, which
+defaults to `global`. Every VPE sample is `us-central1`, and that is the only region this has been
+exercised in — reusing `LOCATION` would point VPE at `global` and fail.
+
+### Settings
+
+All six are read at startup by `config_service`, and `require_vpe_configured` refuses the
+request up front if any of the three required ones is missing — you get a clear 4xx rather than a
+job that dies minutes in.
+
+| Setting | Default | Notes |
+|---|---|---|
+| `VPE_ENABLED` | `false` | Leave false and nothing below matters |
+| `VPE_PROJECT_ID` | *empty* | **The allowlisted project.** May or may not be the project the app runs in |
+| `VPE_BUCKET` | *empty* | A bucket **inside** `VPE_PROJECT_ID`. Use a dedicated one — see below |
+| `VPE_LOCATION` | `us-central1` | |
+| `VPE_DRY_RUN` | `false` | `true` builds and logs the request without calling Vertex or billing |
+| `VPE_MAX_CONCURRENT_JOBS` | `3` | |
+
+`VPE_PROJECT_ID` and `VPE_BUCKET` ship empty on purpose. There is no sensible default for either,
+and inheriting the app's project would silently produce the cross-project failure below.
+
+**Where they go.** These are ordinary Cloud Run environment variables, set through Terraform's
+`be_env_vars` map — `common` for every environment, or a named environment for one:
+
+```hcl
+be_env_vars = {
+  common = {
+    LOG_LEVEL = "INFO"
+  }
+  production = {
+    ENVIRONMENT    = "production"
+    VPE_ENABLED    = "true"
+    VPE_PROJECT_ID = "<allowlisted-project>"
+    VPE_BUCKET     = "<dedicated-bucket>"
+    VPE_LOCATION   = "us-central1"
+  }
+}
+```
+
+Terraform values are strings, so `VPE_ENABLED` is `"true"`, not a bare `true`. Pydantic parses it.
+`VPE_LOCATION` can be omitted since `us-central1` is already the default; it is listed here
+because being explicit costs nothing and the app's separate `LOCATION` defaults to `global`.
+
+### Two projects, or one
+
+The worker holds two Cloud Storage clients — one for the app's own bucket and one for
+`VPE_BUCKET` — because VPE requires its input and output buckets to live in the allowlisted
+project.
+
+**If the app is deployed into a project that is not allowlisted**, `VPE_PROJECT_ID` names the
+allowlisted one and `VPE_BUCKET` must be a bucket inside it. Pointing `VPE_BUCKET` at the app's
+bucket in a different project fails at job time, not at startup. The deployed backend's service
+account then needs access to **both** projects.
+
+**If the app is deployed into the allowlisted project itself**, set `VPE_PROJECT_ID` to that same
+project. Everything works; the two clients simply resolve into one project. Still give VPE its
+**own bucket** rather than reusing the app's media bucket, for two reasons that are about blast
+radius rather than correctness:
+
+- The three Vertex service agents need `roles/storage.admin` on whatever `VPE_BUCKET` names.
+  Pointed at your media bucket, that is full control — including delete — over every user's
+  media. A dedicated bucket confines it to scratch data.
+- **VPE's outputs are never cleaned up.** The worker deletes the input segments it uploaded once
+  a job succeeds, but the upscaled segment VPE wrote under `vpe/upscale/<id>/out_NN/` stays.
+  Those are 4K video and they accumulate. A dedicated bucket lets you put an age-based lifecycle
+  rule on the whole thing; a shared one does not, because the same rule would reach user media.
+
+All VPE traffic stays under the `vpe/upscale/<media item id>/` prefix, and the finished master is
+written to `upscaled_videos/` in the app's bucket, so a shared bucket does not collide — it is
+only the two concerns above.
+
+### Prepare the allowlisted project before deploying
+
+**This is the step that will fail if skipped**, and the failure message does not explain itself.
+VPE needs three service agents holding `roles/storage.admin` on the I/O bucket, and two of them —
+`gcp-sa-vertex-bp` and `gcp-sa-vertex-tune` — **do not exist** until a batch-prediction job and a
+tuning job have each been started once in that project. Granting a role to an agent that was
+never provisioned returns `Principal does not exist`.
+
+```bash
+backend/scripts/vpe_bootstrap_project.sh \
+    --project <allowlisted-project> \
+    --bucket <bucket-in-that-project> \
+    --runtime-sa <the deployed backend's service account> \
+    --lifecycle-days 30
+```
+
+`--lifecycle-days` is optional but recommended — it bounds the scratch data described above. The
+rule is scoped to the `vpe/upscale/` prefix, so it is safe even on a shared bucket, and the script
+refuses to touch a bucket that already has a lifecycle policy rather than replacing it.
+
+It enables the APIs, creates or verifies the bucket, provokes the missing agents into existing by
+starting and immediately cancelling a throwaway job, grants all three, and prints the settings
+above filled in. It is idempotent — run it again after any change and it reports what it found.
+`--dry-run` prints every command without touching anything.
+
+One part is not automatable: there is no non-interactive gcloud surface for starting a tuning
+job, so `gcp-sa-vertex-tune` has to be provoked once from the Console (**Vertex AI → Tuning →
+Create tuned model**, then cancel it). The script detects this, says so, and completes the rest.
+
+### What it costs, and what it does to a clip
+
+- An upscale is **billed per segment**, and a clip longer than 192 frames is split into several.
+  A 240-frame clip is two segments, not one.
+- Roughly **5 minutes of wall clock per segment**. The UI polls; it does not block.
+- Only clips that are **exactly 24 fps**, 96–192 frames, and one of `1280x720`, `720x1280`,
+  `1920x1080`, `1080x1920` are eligible. The gallery screens each clip on open and shows the
+  Upscale button on every video, enabled only where the screening did not rule it out. Expect
+  users to see a disabled button with a tooltip on most existing library clips — a clip that was
+  not generated at 24 fps will never be eligible.
+
+### Rolling back
+
+Set `VPE_ENABLED=false` and redeploy. There is no schema to unwind. Media items produced by an
+upscale remain in the gallery and stay playable — they are ordinary rows.
