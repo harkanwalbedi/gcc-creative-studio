@@ -64,6 +64,17 @@ export interface AssetReferenceDto {
   index?: number;
 }
 
+export interface ConditioningFrameDto {
+  frame_number: number;
+  image_asset_id: AssetReferenceDto;
+}
+
+export interface KeyframeSlot {
+  frameNumber: number;
+  previewUrl: string;
+  assetId: AssetReferenceDto;
+}
+
 export type VeoRequest = {
   prompt: string;
   generationModel: string;
@@ -100,6 +111,11 @@ export type VeoRequest = {
    */
   stripSourceAudio?: boolean;
   resolution?: '1K' | '2K' | '4K';
+  videoTransformStrength?: number;
+  numDiffusionSteps?: number;
+  seed?: number;
+  videoTransformMaskAssetId?: AssetReferenceDto | null;
+  conditioningFrames?: ConditioningFrameDto[] | null;
 };
 
 export type SearchResponse = {
@@ -167,6 +183,7 @@ export interface ReferenceVideo {
   id: number;
   type: 'source_asset' | 'media_item';
   previewUrl: string;
+  videoUrl?: string;
   index?: number;
 }
 

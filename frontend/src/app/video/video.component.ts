@@ -47,11 +47,13 @@ import {
 } from '../common/config/model-config';
 import {JobStatus, MediaItem} from '../common/models/media-item.model';
 import {
+  AssetReferenceDto,
   ReferenceImage,
   ReferenceVideo,
   ReferenceAudio,
   SourceMediaItemLink,
   VeoRequest,
+  KeyframeSlot,
 } from '../common/models/search.model';
 import {
   SourceAssetResponseDto,
@@ -118,9 +120,14 @@ export class VideoComponent implements OnInit, AfterViewInit {
   parentMediaItemId: number | null = null;
   parentMediaIndex = 0;
   editSource: ReferenceVideo | null = null;
+  maskSource: ReferenceVideo | null = null;
+  conditioningKeyframes: KeyframeSlot[] = [];
   // Omni refuses to edit a clip containing speech when reference images are
   // also supplied, and its own output always carries audio, so default on.
   stripSourceAudio = true;
+  transformStrength = 0.5;
+  seed: number | null = null;
+  numDiffusionSteps = 20;
   currentMode = 'Text to Video';
   modes = [
     {value: 'Text to Video', icon: 'description', label: 'Text to Video'},
@@ -325,7 +332,11 @@ export class VideoComponent implements OnInit, AfterViewInit {
       referenceVideo: this.referenceVideo,
       referenceAudio: this.referenceAudio,
       editSource: this.editSource,
+      maskSource: this.maskSource,
       stripSourceAudio: this.stripSourceAudio,
+      transformStrength: this.transformStrength,
+      seed: this.seed,
+      numDiffusionSteps: this.numDiffusionSteps,
     });
   }
 
@@ -359,7 +370,11 @@ export class VideoComponent implements OnInit, AfterViewInit {
     this.referenceVideo = state.referenceVideo || null;
     this.referenceAudio = state.referenceAudio || null;
     this.editSource = state.editSource || null;
+    this.maskSource = state.maskSource || null;
     this.stripSourceAudio = state.stripSourceAudio ?? true;
+    this.transformStrength = state.transformStrength ?? 0.5;
+    this.seed = state.seed ?? null;
+    this.numDiffusionSteps = state.numDiffusionSteps ?? 20;
 
     this.negativePhrases = state.negativePrompt
       ? state.negativePrompt.split(', ').filter(Boolean)
@@ -1007,6 +1022,36 @@ export class VideoComponent implements OnInit, AfterViewInit {
               type: this.editSource.type,
               index: this.editSource.index,
             }
+          : undefined,
+      videoTransformStrength:
+        this.searchRequest.generationModel === 'veo-exp-video-transform'
+          ? this.transformStrength
+          : undefined,
+      numDiffusionSteps:
+        this.searchRequest.generationModel === 'veo-exp-video-transform'
+          ? this.numDiffusionSteps
+          : undefined,
+      seed:
+        this.searchRequest.generationModel === 'veo-exp-video-transform' &&
+        this.seed !== null
+          ? this.seed
+          : undefined,
+      videoTransformMaskAssetId:
+        this.searchRequest.generationModel === 'veo-exp-video-transform' &&
+        this.maskSource
+          ? {
+              id: this.maskSource.id,
+              type: this.maskSource.type,
+              index: this.maskSource.index,
+            }
+          : undefined,
+      conditioningFrames:
+        this.searchRequest.generationModel === 'veo-exp-video-transform' &&
+        this.conditioningKeyframes.length > 0
+          ? this.conditioningKeyframes.map(cf => ({
+              frame_number: cf.frameNumber,
+              image_asset_id: cf.assetId,
+            }))
           : undefined,
     };
 
@@ -1886,10 +1931,13 @@ export class VideoComponent implements OnInit, AfterViewInit {
 
       const res = Array.isArray(result) ? result[0] : result;
       if ('gcsUri' in res) {
+        const videoUrl = res.presignedUrl || res.presignedThumbnailUrl || '';
+        const previewUrl = res.presignedThumbnailUrl || res.presignedUrl || '';
         this.editSource = {
           id: res.id,
           type: 'source_asset',
-          previewUrl: res.presignedThumbnailUrl || res.presignedUrl || '',
+          previewUrl: previewUrl,
+          videoUrl: videoUrl,
           index: 0,
         };
         // An uploaded clip has no prior conversation to continue, so the edit
@@ -1899,13 +1947,14 @@ export class VideoComponent implements OnInit, AfterViewInit {
       } else {
         const thumbnail =
           res.mediaItem.presignedThumbnailUrls?.[res.selectedIndex];
-        const previewUrl =
-          thumbnail || res.mediaItem.presignedUrls?.[res.selectedIndex];
-        if (previewUrl) {
+        const videoUrl = res.mediaItem.presignedUrls?.[res.selectedIndex] || '';
+        const previewUrl = thumbnail || videoUrl;
+        if (previewUrl || videoUrl) {
           this.editSource = {
             id: res.mediaItem.id,
             type: 'media_item',
             previewUrl: previewUrl,
+            videoUrl: videoUrl,
             index: res.selectedIndex,
           };
         }
@@ -1919,12 +1968,141 @@ export class VideoComponent implements OnInit, AfterViewInit {
     this.saveState();
   }
 
+  onTransformStrengthChanged(value: number): void {
+    this.transformStrength = value;
+    this.saveState();
+  }
+
+  onSeedChanged(value: number | null): void {
+    this.seed = value;
+    this.saveState();
+  }
+
+  onNumDiffusionStepsChanged(value: number): void {
+    this.numDiffusionSteps = value;
+    this.saveState();
+  }
+
   clearEditSource(event: Event): void {
     event.stopPropagation();
     this.editSource = null;
     this.parentMediaItemId = null;
     this.parentMediaIndex = 0;
     this.saveState();
+  }
+
+  openVideoSelectorForMask(): void {
+    const dialogRef = this.dialog.open(ImageSelectorComponent, {
+      width: '90vw',
+      height: '80vh',
+      maxWidth: '90vw',
+      data: {
+        mimeType: 'video/*',
+        multiSelect: false,
+      },
+      panelClass: 'image-selector-dialog',
+    });
+
+    dialogRef.afterClosed().subscribe((result: any) => {
+      if (!result) return;
+
+      const res = Array.isArray(result) ? result[0] : result;
+      if ('gcsUri' in res) {
+        this.maskSource = {
+          id: res.id,
+          type: 'source_asset',
+          previewUrl: res.presignedThumbnailUrl || res.presignedUrl || '',
+          index: 0,
+        };
+      } else {
+        const thumbnail =
+          res.mediaItem.presignedThumbnailUrls?.[res.selectedIndex];
+        const previewUrl =
+          thumbnail || res.mediaItem.presignedUrls?.[res.selectedIndex];
+        if (previewUrl) {
+          this.maskSource = {
+            id: res.mediaItem.id,
+            type: 'media_item',
+            previewUrl: previewUrl,
+            index: res.selectedIndex,
+          };
+        }
+      }
+      this.saveState();
+    });
+  }
+
+  clearMaskSource(event: Event): void {
+    event.stopPropagation();
+    this.maskSource = null;
+    this.saveState();
+  }
+
+  addConditioningKeyframe(): void {
+    const dialogRef = this.dialog.open(ImageSelectorComponent, {
+      width: '90vw',
+      height: '80vh',
+      maxWidth: '90vw',
+      data: {
+        mimeType: 'image/*',
+        multiSelect: false,
+      },
+      panelClass: 'image-selector-dialog',
+    });
+
+    dialogRef.afterClosed().subscribe((result: any) => {
+      if (!result) return;
+      const res = Array.isArray(result) ? result[0] : result;
+      let assetId: AssetReferenceDto;
+      let previewUrl = '';
+
+      if ('gcsUri' in res) {
+        assetId = {
+          id: res.id,
+          type: 'source_asset',
+          index: 0,
+        };
+        previewUrl = res.presignedThumbnailUrl || res.presignedUrl || '';
+      } else {
+        const thumbnail =
+          res.mediaItem.presignedThumbnailUrls?.[res.selectedIndex];
+        previewUrl =
+          thumbnail || res.mediaItem.presignedUrls?.[res.selectedIndex] || '';
+        assetId = {
+          id: res.mediaItem.id,
+          type: 'media_item',
+          index: res.selectedIndex || 0,
+        };
+      }
+
+      // Default frame intervals (multiples of 8): 24, 48, 72, 96, 128, etc.
+      const defaultInterval = 24 * (this.conditioningKeyframes.length + 1);
+      const frameNumber = Math.min(defaultInterval, 184);
+
+      this.conditioningKeyframes.push({
+        frameNumber,
+        previewUrl,
+        assetId,
+      });
+      this.saveState();
+    });
+  }
+
+  removeConditioningKeyframe(index: number): void {
+    if (index >= 0 && index < this.conditioningKeyframes.length) {
+      this.conditioningKeyframes.splice(index, 1);
+      this.saveState();
+    }
+  }
+
+  onKeyframeFrameNumberChanged(event: {
+    index: number;
+    frameNumber: number;
+  }): void {
+    if (event.index >= 0 && event.index < this.conditioningKeyframes.length) {
+      this.conditioningKeyframes[event.index].frameNumber = event.frameNumber;
+      this.saveState();
+    }
   }
 
   openAudioSelectorForReference(): void {

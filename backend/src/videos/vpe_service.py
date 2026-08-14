@@ -49,6 +49,7 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 from fastapi import Depends, HTTPException
 from google.cloud.logging import Client as LoggerClient
@@ -65,6 +66,15 @@ from src.common.schema.media_item_model import (
     JobStatusEnum,
     MediaItemModel,
     SourceMediaItemLink,
+)
+import subprocess
+import numpy as np
+import shortuuid
+from src.auth.iam_signer_credentials_service import IamSignerCredentials
+from src.source_assets.schema.source_asset_model import (
+    SourceAssetModel,
+    AssetTypeEnum,
+    AssetScopeEnum,
 )
 from src.common.storage_service import GcsService
 from src.config.config_service import ConfigService, config_service
@@ -92,11 +102,18 @@ from src.videos.vpe.media_ops import (
     concat_segments,
     cut_segment,
     postprocess_dialogue_video,
+    postprocess_transform_video,
     prepare_dialogue_audio,
     prepare_dialogue_frame,
+    prepare_transform_video,
     restore_audio,
 )
-from src.videos.vpe.payloads import VpeMediaRef, VpeRequest, build_payload
+from src.videos.vpe.payloads import (
+    VpeConditioningFrame,
+    VpeMediaRef,
+    VpeRequest,
+    build_payload,
+)
 from src.videos.vpe.preflight import (
     VpeMediaProbe,
     VpeReasonCode,
@@ -137,6 +154,48 @@ _SEGMENTABLE_CODES = frozenset(
 
 class VpeJobError(RuntimeError):
     """Raised when an upscale cannot be run as requested."""
+
+
+async def _resolve_asset_ref_uri(
+    ref: Any,
+    media_repo: Any,
+    source_asset_repo: Any,
+) -> str | None:
+    """Resolves a GCS URI from an AssetReferenceDto."""
+    if not ref:
+        return None
+    if getattr(ref, "type", None) == "media_item":
+        parent_item = await media_repo.get_by_id(ref.id)
+        if parent_item and parent_item.gcs_uris:
+            idx = getattr(ref, "index", 0) or 0
+            if 0 <= idx < len(parent_item.gcs_uris):
+                return parent_item.gcs_uris[idx]
+        return None
+    asset = await source_asset_repo.get_by_id(ref.id)
+    if asset:
+        return asset.gcs_uri
+    return None
+
+
+async def _download_asset_gcs(
+    uri: str,
+    target_path: Path,
+    app_gcs: Any,
+    vpe_gcs: Any,
+) -> bool:
+    """Downloads a file from either app or vpe GCS."""
+    downloaded = await asyncio.to_thread(
+        app_gcs.download_from_gcs,
+        gcs_uri_path=_blob_path(uri),
+        destination_file_path=str(target_path),
+    )
+    if not downloaded:
+        downloaded = await asyncio.to_thread(
+            vpe_gcs.download_from_gcs,
+            gcs_uri_path=_blob_path(uri),
+            destination_file_path=str(target_path),
+        )
+    return downloaded
 
 
 def aspect_ratio_for(probe: VpeMediaProbe) -> str:
@@ -1082,6 +1141,535 @@ def _process_vpe_dialogue_in_background(  # noqa: PLR0915
         )
 
 
+def _process_vpe_transform_in_background(
+    media_item_id: int,
+    request_dto: CreateVeoDto,
+    user_email: str,
+) -> None:
+    """Background worker for veo-exp-video-transform requests."""
+    worker_logger = logging.getLogger(f"vpe_transform_worker_{media_item_id}")
+    worker_logger.setLevel(logging.INFO)
+    if not worker_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s - [VPE_TRANSFORM_WORKER] - %(levelname)s - %(message)s",
+            ),
+        )
+        worker_logger.addHandler(handler)
+
+    temp_dir = tempfile.mkdtemp(prefix=f"vpe_transform_{media_item_id}_")
+
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def _async_worker():
+            async with WorkerDatabase() as db_factory:
+                async with db_factory() as db:
+                    media_repo = MediaRepository(db)
+                    source_asset_repo = SourceAssetRepository(db)
+                    cfg = config_service
+                    app_gcs = GcsService()
+                    vpe_gcs = GcsService(bucket_name=cfg.VPE_BUCKET)
+                    client = VpeClient(project_id=cfg.VPE_PROJECT_ID)
+
+                    try:
+                        await record_worker_progress(
+                            media_repo,
+                            media_item_id,
+                            worker_logger,
+                        )
+                        require_vpe_configured(cfg)
+                        start_time = time.monotonic()
+
+                        work = Path(temp_dir)
+
+                        is_keyframe_i2v = bool(
+                            request_dto.start_image_asset_id
+                            and not request_dto.source_video_asset_id
+                            and not request_dto.edit_source
+                            and not (
+                                request_dto.source_media_items
+                                and any(
+                                    item.role
+                                    == AssetRoleEnum.VIDEO_EXTENSION_SOURCE
+                                    for item in request_dto.source_media_items
+                                )
+                            )
+                        )
+
+                        if is_keyframe_i2v:
+                            # 1. Resolve & Stage first frame image
+                            first_uri = await _resolve_asset_ref_uri(
+                                request_dto.start_image_asset_id,
+                                media_repo,
+                                source_asset_repo,
+                            )
+                            if not first_uri:
+                                raise VpeJobError(
+                                    "No first frame image could be resolved for keyframe video transform.",
+                                )
+                            local_first_img = work / "first_frame.png"
+                            await _download_asset_gcs(
+                                first_uri, local_first_img, app_gcs, vpe_gcs
+                            )
+                            staged_first_blob = (
+                                f"vpe/transform/{media_item_id}/first_frame.png"
+                            )
+                            staged_first_uri = await asyncio.to_thread(
+                                vpe_gcs.upload_file_to_gcs,
+                                local_path=str(local_first_img),
+                                destination_blob_name=staged_first_blob,
+                                mime_type="image/png",
+                            )
+                            image_ref = VpeMediaRef(
+                                gcs_uri=staged_first_uri, mime_type="image/png"
+                            )
+
+                            # 2. Resolve optional last frame image
+                            last_frame_ref = None
+                            if request_dto.end_image_asset_id:
+                                last_uri = await _resolve_asset_ref_uri(
+                                    request_dto.end_image_asset_id,
+                                    media_repo,
+                                    source_asset_repo,
+                                )
+                                if last_uri:
+                                    local_last_img = work / "last_frame.png"
+                                    await _download_asset_gcs(
+                                        last_uri,
+                                        local_last_img,
+                                        app_gcs,
+                                        vpe_gcs,
+                                    )
+                                    staged_last_blob = f"vpe/transform/{media_item_id}/last_frame.png"
+                                    staged_last_uri = await asyncio.to_thread(
+                                        vpe_gcs.upload_file_to_gcs,
+                                        local_path=str(local_last_img),
+                                        destination_blob_name=staged_last_blob,
+                                        mime_type="image/png",
+                                    )
+                                    last_frame_ref = VpeMediaRef(
+                                        gcs_uri=staged_last_uri,
+                                        mime_type="image/png",
+                                    )
+
+                            # 3. Resolve optional conditioning keyframes
+                            conditioning_frames_list: list[
+                                VpeConditioningFrame
+                            ] = []
+                            if request_dto.conditioning_frames:
+                                for (
+                                    idx,
+                                    cf,
+                                ) in enumerate(request_dto.conditioning_frames):
+                                    cf_uri = await _resolve_asset_ref_uri(
+                                        cf.image_asset_id,
+                                        media_repo,
+                                        source_asset_repo,
+                                    )
+                                    if cf_uri:
+                                        local_cf_img = (
+                                            work
+                                            / f"cf_{cf.frame_number}_{idx}.png"
+                                        )
+                                        await _download_asset_gcs(
+                                            cf_uri,
+                                            local_cf_img,
+                                            app_gcs,
+                                            vpe_gcs,
+                                        )
+                                        staged_cf_blob = f"vpe/transform/{media_item_id}/cf_{cf.frame_number}_{idx}.png"
+                                        staged_cf_uri = await asyncio.to_thread(
+                                            vpe_gcs.upload_file_to_gcs,
+                                            local_path=str(local_cf_img),
+                                            destination_blob_name=staged_cf_blob,
+                                            mime_type="image/png",
+                                        )
+                                        conditioning_frames_list.append(
+                                            VpeConditioningFrame(
+                                                frame_num=cf.frame_number,
+                                                image=VpeMediaRef(
+                                                    gcs_uri=staged_cf_uri,
+                                                    mime_type="image/png",
+                                                ),
+                                            )
+                                        )
+
+                            vpe_req = VpeRequest(
+                                capability_id=VpeCapabilityId.VIDEO_TRANSFORM,
+                                storage_uri=f"gs://{cfg.VPE_BUCKET}/vpe/transform/{media_item_id}/out",
+                                prompt=request_dto.prompt,
+                                image=image_ref,
+                                last_frame=last_frame_ref,
+                                conditioning_frames=(
+                                    tuple(conditioning_frames_list)
+                                    if conditioning_frames_list
+                                    else None
+                                ),
+                                video_transform_strength=None,
+                                num_diffusion_steps=(
+                                    request_dto.num_diffusion_steps or 20
+                                ),
+                                seed=request_dto.seed,
+                            )
+                        else:
+                            # 1. Resolve & Download input video
+                            video_gcs_uri = None
+                            if request_dto.source_video_asset_id:
+                                video_gcs_uri = await _resolve_asset_ref_uri(
+                                    request_dto.source_video_asset_id,
+                                    media_repo,
+                                    source_asset_repo,
+                                )
+                            elif request_dto.edit_source:
+                                video_gcs_uri = await _resolve_asset_ref_uri(
+                                    request_dto.edit_source,
+                                    media_repo,
+                                    source_asset_repo,
+                                )
+                            elif request_dto.source_media_items:
+                                for item in request_dto.source_media_items:
+                                    parent_item = await media_repo.get_by_id(
+                                        item.media_item_id
+                                    )
+                                    if parent_item and parent_item.gcs_uris:
+                                        video_gcs_uri = parent_item.gcs_uris[
+                                            item.media_index or 0
+                                        ]
+                                        break
+
+                            if not video_gcs_uri:
+                                raise VpeJobError(
+                                    "No input video could be resolved for video transform.",
+                                )
+
+                            local_raw_video = work / "input_video_raw.mp4"
+                            await _download_asset_gcs(
+                                video_gcs_uri,
+                                local_raw_video,
+                                app_gcs,
+                                vpe_gcs,
+                            )
+
+                            # 2. Resolve optional mask video
+                            staged_mask_uri = None
+                            if request_dto.video_transform_mask_asset_id:
+                                mask_gcs_uri = await _resolve_asset_ref_uri(
+                                    request_dto.video_transform_mask_asset_id,
+                                    media_repo,
+                                    source_asset_repo,
+                                )
+
+                                if mask_gcs_uri:
+                                    local_raw_mask = work / "mask_raw.mp4"
+                                    await _download_asset_gcs(
+                                        mask_gcs_uri,
+                                        local_raw_mask,
+                                        app_gcs,
+                                        vpe_gcs,
+                                    )
+                                    local_norm_mask = work / "mask_norm.mp4"
+                                    is_portrait_mask = (
+                                        request_dto.aspect_ratio
+                                        == AspectRatioEnum.RATIO_9_16
+                                    )
+                                    await asyncio.to_thread(
+                                        prepare_transform_video,
+                                        local_raw_mask,
+                                        local_norm_mask,
+                                        is_portrait_mask,
+                                    )
+                                    staged_mask_blob = f"vpe/transform/{media_item_id}/mask.mp4"
+                                    staged_mask_uri = await asyncio.to_thread(
+                                        vpe_gcs.upload_file_to_gcs,
+                                        local_path=str(local_norm_mask),
+                                        destination_blob_name=staged_mask_blob,
+                                        mime_type="video/mp4",
+                                    )
+
+                            # 3. Transcode/Prepare video (normalize to 24fps 720p, pad if 9:16)
+                            is_portrait = (
+                                request_dto.aspect_ratio
+                                == AspectRatioEnum.RATIO_9_16
+                            )
+                            local_norm_video = work / "norm_video_1280x720.mp4"
+                            await asyncio.to_thread(
+                                prepare_transform_video,
+                                local_raw_video,
+                                local_norm_video,
+                                is_portrait,
+                            )
+
+                            # 4. Upload normalized video to VPE staging
+                            staged_video_blob = (
+                                f"vpe/transform/{media_item_id}/input.mp4"
+                            )
+                            staged_video_uri = await asyncio.to_thread(
+                                vpe_gcs.upload_file_to_gcs,
+                                local_path=str(local_norm_video),
+                                destination_blob_name=staged_video_blob,
+                                mime_type="video/mp4",
+                            )
+
+                            # 5. Build VPE request
+                            vpe_req = VpeRequest(
+                                capability_id=VpeCapabilityId.VIDEO_TRANSFORM,
+                                storage_uri=f"gs://{cfg.VPE_BUCKET}/vpe/transform/{media_item_id}/out",
+                                prompt=request_dto.prompt,
+                                video=VpeMediaRef(
+                                    gcs_uri=staged_video_uri,
+                                    mime_type="video/mp4",
+                                ),
+                                video_transform_strength=(
+                                    request_dto.video_transform_strength
+                                    if request_dto.video_transform_strength
+                                    is not None
+                                    else 0.5
+                                ),
+                                num_diffusion_steps=(
+                                    request_dto.num_diffusion_steps or 20
+                                ),
+                                video_transform_mask_gcs_uri=staged_mask_uri,
+                                seed=request_dto.seed,
+                            )
+
+                        payload = build_payload(vpe_req)
+                        worker_logger.info(
+                            "Submitting VPE video transform job for media item %s: strength=%s, steps=%s, seed=%s",
+                            media_item_id,
+                            vpe_req.video_transform_strength,
+                            vpe_req.num_diffusion_steps,
+                            vpe_req.seed,
+                        )
+                        operation = client.submit(payload)
+                        worker_logger.info(
+                            "VPE video transform operation started: %s",
+                            operation.name,
+                        )
+
+                        # 6. Record operation on media item
+                        await media_repo.update(
+                            media_item_id,
+                            {"raw_data": {"vpe_operation": operation.name}},
+                        )
+
+                        # 7. Poll operation to completion
+                        poll_res = operation
+                        poll_interval = 10.0
+                        total_wait = 0.0
+                        max_wait = 900.0  # 15 minutes max
+                        transient_failures = 0
+                        max_transient = 6
+
+                        while not poll_res.done and total_wait < max_wait:
+                            await asyncio.sleep(poll_interval)
+                            total_wait += poll_interval
+                            try:
+                                poll_res = client.poll(operation.name)
+                                transient_failures = 0
+                            except VpeApiError as api_err:
+                                if is_transient_error(api_err):
+                                    transient_failures += 1
+                                    worker_logger.warning(
+                                        "Transient error polling VPE operation %s (attempt %s/%s): %s",
+                                        operation.name,
+                                        transient_failures,
+                                        max_transient,
+                                        api_err,
+                                    )
+                                    if transient_failures > max_transient:
+                                        raise
+                                    continue
+                                raise
+
+                            await record_worker_progress(
+                                media_repo,
+                                media_item_id,
+                                worker_logger,
+                            )
+                            worker_logger.info(
+                                "Polling VPE video transform operation %s (waited %.1fs, done=%s)",
+                                operation.name,
+                                total_wait,
+                                poll_res.done,
+                            )
+
+                        if not poll_res.done:
+                            raise VpeJobError(
+                                f"VPE video transform job timed out after {total_wait:.1f}s",
+                            )
+
+                        if poll_res.has_error:
+                            error_info = poll_res.raw.get("error") or {}
+                            raise VpeJobError(
+                                f"VPE video transform failed: {error_info.get('message', 'Unknown error')}",
+                            )
+
+                        # 8. Download generated video from VPE output
+                        result = parse_result(poll_res)
+                        if not result.primary_video:
+                            raise VpeJobError(
+                                "VPE video transform finished without producing an output video.",
+                            )
+
+                        local_gen_video = work / "generated_raw.mp4"
+                        gen_downloaded = await asyncio.to_thread(
+                            vpe_gcs.download_from_gcs,
+                            gcs_uri_path=_blob_path(
+                                result.primary_video.gcs_uri
+                            ),
+                            destination_file_path=str(local_gen_video),
+                        )
+                        if not gen_downloaded:
+                            raise VpeJobError(
+                                f"Could not download generated video from {result.primary_video.gcs_uri}",
+                            )
+
+                        # 9. Postprocess (composite over source with mask if masked transform, crop if 9:16 portrait)
+                        video_to_postprocess = local_gen_video
+                        if (
+                            staged_mask_uri
+                            and local_norm_mask.exists()
+                            and local_norm_video.exists()
+                        ):
+                            local_composited = work / "composited_masked.mp4"
+                            composite_cmd = [
+                                "ffmpeg",
+                                "-y",
+                                "-i",
+                                str(local_norm_video),
+                                "-i",
+                                str(local_gen_video),
+                                "-i",
+                                str(local_norm_mask),
+                                "-filter_complex",
+                                "[0:v][1:v][2:v]maskedmerge[outv]",
+                                "-map",
+                                "[outv]",
+                                "-map",
+                                "0:a?",
+                                "-c:v",
+                                "libx264",
+                                "-pix_fmt",
+                                "yuv420p",
+                                "-c:a",
+                                "copy",
+                                str(local_composited),
+                            ]
+                            try:
+                                await asyncio.to_thread(
+                                    subprocess.run,
+                                    composite_cmd,
+                                    check=True,
+                                    capture_output=True,
+                                )
+                                video_to_postprocess = local_composited
+                            except Exception as comp_err:
+                                worker_logger.warning(
+                                    "Masked compositing fallback: %s",
+                                    comp_err,
+                                )
+
+                        local_final_video = work / "final_transformed.mp4"
+                        await asyncio.to_thread(
+                            postprocess_transform_video,
+                            video_to_postprocess,
+                            local_final_video,
+                            is_portrait,
+                        )
+
+                        # 10. Generate thumbnail
+                        thumb_path = await asyncio.to_thread(
+                            generate_thumbnail,
+                            str(local_final_video),
+                        )
+                        thumb_gcs_uri = None
+                        if thumb_path:
+                            thumb_gcs_uri = await asyncio.to_thread(
+                                app_gcs.upload_file_to_gcs,
+                                local_path=thumb_path,
+                                destination_blob_name=(
+                                    f"generated_videos/transform_{media_item_id}_thumb.png"
+                                ),
+                                mime_type="image/png",
+                            )
+
+                        # 11. Upload final assets to application bucket
+                        final_blob = (
+                            f"generated_videos/transform_{media_item_id}.mp4"
+                        )
+                        final_gcs_uri = await asyncio.to_thread(
+                            app_gcs.upload_file_to_gcs,
+                            local_path=str(local_final_video),
+                            destination_blob_name=final_blob,
+                            mime_type="video/mp4",
+                        )
+
+                        measured_metadata = await asyncio.to_thread(
+                            build_measured_metadata,
+                            str(local_final_video),
+                        )
+
+                        # 12. Update row to COMPLETED
+                        await media_repo.update(
+                            media_item_id,
+                            {
+                                "status": JobStatusEnum.COMPLETED,
+                                "gcs_uris": [final_gcs_uri],
+                                "thumbnail_uris": (
+                                    [thumb_gcs_uri] if thumb_gcs_uri else []
+                                ),
+                                "generation_time": (
+                                    time.monotonic() - start_time
+                                ),
+                                "num_media": 1,
+                                **measured_metadata,
+                            },
+                        )
+                        worker_logger.info(
+                            "Video transform completed for media item %s",
+                            media_item_id,
+                        )
+
+                    except Exception as error:  # noqa: BLE001
+                        worker_logger.error(
+                            "VPE video transform failed: %s",
+                            error,
+                            exc_info=True,
+                        )
+                        try:
+                            await db.rollback()
+                            await media_repo.update(
+                                media_item_id,
+                                {
+                                    "status": JobStatusEnum.FAILED,
+                                    "error_message": str(error),
+                                },
+                            )
+                        except Exception as update_error:  # noqa: BLE001
+                            worker_logger.error(
+                                "Could not record failure on media item %s: %s",
+                                media_item_id,
+                                update_error,
+                                exc_info=True,
+                            )
+                    finally:
+                        if os.path.exists(temp_dir):
+                            shutil.rmtree(temp_dir)
+
+        loop.run_until_complete(_async_worker())
+        loop.close()
+
+    except Exception as error:  # noqa: BLE001
+        worker_logger.error(
+            "VPE video transform worker failed to initialize: %s",
+            error,
+            exc_info=True,
+        )
+
+
 class VpeService:
     """Application-facing entry points for VPE capabilities."""
 
@@ -1090,6 +1678,7 @@ class VpeService:
         media_repo: MediaRepository = Depends(),
         source_asset_repo: SourceAssetRepository = Depends(),
         gcs_service: GcsService = Depends(),
+        iam_signer: IamSignerCredentials = Depends(),
     ):
         """Initializes the service with its dependencies.
 
@@ -1097,10 +1686,12 @@ class VpeService:
             media_repo: Repository owning gallery rows.
             source_asset_repo: Repository owning source/template asset rows.
             gcs_service: Storage service for the application's own bucket.
+            iam_signer: Signer service for generating presigned URLs.
         """
         self.media_repo = media_repo
         self.source_asset_repo = source_asset_repo
         self.gcs_service = gcs_service
+        self.iam_signer = iam_signer
 
     async def screen_media_item(
         self,

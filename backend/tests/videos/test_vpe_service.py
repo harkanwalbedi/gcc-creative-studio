@@ -21,11 +21,11 @@ minutes into a paid job.
 """
 
 from fractions import Fraction
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 
-from src.common.base_dto import MimeTypeEnum
+from src.common.base_dto import GenerationModelEnum, MimeTypeEnum
 from src.config.config_service import config_service
 from src.users.user_model import UserModel, UserRoleEnum
 from src.videos.dto.upscale_video_dto import UpscaleVideoDto
@@ -464,6 +464,105 @@ class TestProcessVpeDialogueInBackground:
 
         # Worker catches errors, logs, and handles DB updates
         _process_vpe_dialogue_in_background(
+            media_item_id=999,
+            request_dto=dto,
+            user_email="test@example.com",
+        )
+
+
+class TestProcessVpeTransformInBackground:
+    """Tests for the video transform background worker."""
+
+    def test_worker_fails_gracefully_when_unconfigured(self, monkeypatch):
+        from src.videos.dto.create_veo_dto import CreateVeoDto
+        from src.videos.vpe_service import _process_vpe_transform_in_background
+
+        monkeypatch.setattr(config_service, "VPE_ENABLED", False)
+
+        dto = CreateVeoDto(
+            prompt="Transform test",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.VEO_EXP_VIDEO_TRANSFORM,
+            edit_source={"id": 1, "type": "source_asset"},
+            video_transform_strength=0.5,
+            num_diffusion_steps=20,
+            duration_seconds=8,
+            resolution="1K",
+        )
+
+        # Worker catches errors, logs, and handles DB updates
+        _process_vpe_transform_in_background(
+            media_item_id=999,
+            request_dto=dto,
+            user_email="test@example.com",
+        )
+
+    def test_masked_transform_dto_and_worker(self, monkeypatch):
+        from src.videos.dto.create_veo_dto import CreateVeoDto
+        from src.videos.vpe_service import _process_vpe_transform_in_background
+
+        monkeypatch.setattr(config_service, "VPE_ENABLED", False)
+
+        dto = CreateVeoDto(
+            prompt="Masked transform test",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.VEO_EXP_VIDEO_TRANSFORM,
+            edit_source={"id": 1, "type": "source_asset"},
+            video_transform_mask_asset_id={"id": 2, "type": "source_asset"},
+            video_transform_strength=0.8,
+            num_diffusion_steps=30,
+            seed=42,
+            duration_seconds=8,
+            resolution="1K",
+        )
+        assert dto.video_transform_mask_asset_id.id == 2
+        assert dto.video_transform_strength == 0.8
+        assert dto.seed == 42
+
+        _process_vpe_transform_in_background(
+            media_item_id=999,
+            request_dto=dto,
+            user_email="test@example.com",
+        )
+
+    def test_keyframe_transform_dto_and_worker(self, monkeypatch):
+        from src.videos.dto.create_veo_dto import (
+            ConditioningFrameDto,
+            CreateVeoDto,
+        )
+        from src.videos.vpe_service import _process_vpe_transform_in_background
+
+        monkeypatch.setattr(config_service, "VPE_ENABLED", False)
+
+        dto = CreateVeoDto(
+            prompt="Keyframe interpolation test",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.VEO_EXP_VIDEO_TRANSFORM,
+            start_image_asset_id={"id": 1, "type": "source_asset"},
+            end_image_asset_id={"id": 3, "type": "source_asset"},
+            conditioning_frames=[
+                ConditioningFrameDto(
+                    frame_number=24,
+                    image_asset_id={"id": 2, "type": "source_asset"},
+                ),
+                ConditioningFrameDto(
+                    frame_number=72,
+                    image_asset_id={"id": 4, "type": "source_asset"},
+                ),
+            ],
+            video_transform_strength=0.6,
+            num_diffusion_steps=25,
+            seed=12345,
+            duration_seconds=8,
+            resolution="1K",
+        )
+        assert dto.start_image_asset_id.id == 1
+        assert dto.end_image_asset_id.id == 3
+        assert len(dto.conditioning_frames) == 2
+        assert dto.conditioning_frames[0].frame_number == 24
+        assert dto.conditioning_frames[1].frame_number == 72
+
+        _process_vpe_transform_in_background(
             media_item_id=999,
             request_dto=dto,
             user_email="test@example.com",

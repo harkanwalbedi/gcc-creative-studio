@@ -29,7 +29,11 @@ import {
   inject,
 } from '@angular/core';
 import {MatSnackBar} from '@angular/material/snack-bar';
-import {ReferenceImage, ReferenceVideo} from '../../models/search.model';
+import {
+  KeyframeSlot,
+  ReferenceImage,
+  ReferenceVideo,
+} from '../../models/search.model';
 import {GenerationModelConfig} from '../../config/model-config';
 import {MatIconModule} from '@angular/material/icon';
 import {CommonModule} from '@angular/common';
@@ -145,23 +149,45 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
   @Output() clearReferenceVideo = new EventEmitter<Event>();
   @Output() openVideoSelectorForEdit = new EventEmitter<void>();
   @Output() clearEditSource = new EventEmitter<Event>();
+  @Output() openVideoSelectorForMask = new EventEmitter<void>();
+  @Output() clearMaskSource = new EventEmitter<Event>();
   @Output() stripSourceAudioChanged = new EventEmitter<boolean>();
   @Output() resetClicked = new EventEmitter<void>();
   @Output() openAudioSelectorForReference = new EventEmitter<void>();
   @Output() clearReferenceAudio = new EventEmitter<Event>();
   @Output() temperatureChanged = new EventEmitter<number | null>();
+  @Output() transformStrengthChanged = new EventEmitter<number>();
+  @Output() seedChanged = new EventEmitter<number | null>();
+  @Output() numDiffusionStepsChanged = new EventEmitter<number>();
+  @Output() addKeyframeClicked = new EventEmitter<void>();
+  @Output() removeKeyframeClicked = new EventEmitter<number>();
+  @Output() keyframeFrameNumberChanged = new EventEmitter<{
+    index: number;
+    frameNumber: number;
+  }>();
+
+  readonly validFrameNumbers: number[] = [
+    8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144,
+    152, 160, 168, 176, 184,
+  ];
 
   @Input() image1Preview: string | null = null;
   @Input() image2Preview: string | null = null;
+  @Input() conditioningKeyframes: KeyframeSlot[] = [];
   @Input() referenceImages: ReferenceImage[] = [];
   @Input() referenceImagesType: 'ASSET' | 'STYLE' = 'ASSET';
   @Input() referenceVideo: any | null = null;
   /** The clip being modified in Edit Video mode. */
   @Input() editSource: ReferenceVideo | null = null;
+  /** Optional inpainting mask video for localized edits. */
+  @Input() maskSource: ReferenceVideo | null = null;
   @Input() stripSourceAudio = true;
   @Input() referenceAudio: any | null = null;
   /** null means "use the model's default" rather than a chosen value. */
   @Input() temperature: number | null = null;
+  @Input() transformStrength = 0.5;
+  @Input() seed: number | null = null;
+  @Input() numDiffusionSteps = 20;
 
   @ViewChild('promptInput') promptInput?: ElementRef<HTMLTextAreaElement>;
   @ViewChild('modeTrigger') modeTrigger!: ElementRef;
@@ -272,6 +298,54 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
   get supportsFramePlusReferences(): boolean {
     return !!this.getSelectedModelObject()?.capabilities
       ?.supportsFrameWithReferences;
+  }
+
+  get supportsTransformStrength(): boolean {
+    return !!this.getSelectedModelObject()?.capabilities
+      ?.supportsTransformStrength;
+  }
+
+  get supportsDiffusionSteps(): boolean {
+    return !!this.getSelectedModelObject()?.capabilities
+      ?.supportsDiffusionSteps;
+  }
+
+  get supportsSeed(): boolean {
+    return !!this.getSelectedModelObject()?.capabilities?.supportsSeed;
+  }
+
+  onTransformStrengthInput(event: Event) {
+    const val = parseFloat((event.target as HTMLInputElement).value);
+    this.transformStrength = val;
+    this.transformStrengthChanged.emit(val);
+  }
+
+  onNumDiffusionStepsInput(event: Event) {
+    const val = parseInt((event.target as HTMLInputElement).value, 10);
+    if (!isNaN(val)) {
+      this.numDiffusionSteps = val;
+      this.numDiffusionStepsChanged.emit(val);
+    }
+  }
+
+  onSeedInput(event: Event) {
+    const raw = (event.target as HTMLInputElement).value.trim();
+    if (!raw) {
+      this.seed = null;
+      this.seedChanged.emit(null);
+      return;
+    }
+    const val = parseInt(raw, 10);
+    if (!isNaN(val) && val >= 0) {
+      this.seed = val;
+      this.seedChanged.emit(val);
+    }
+  }
+
+  randomizeSeed() {
+    const randomVal = Math.floor(Math.random() * 2147483647);
+    this.seed = randomVal;
+    this.seedChanged.emit(randomVal);
   }
 
   /**

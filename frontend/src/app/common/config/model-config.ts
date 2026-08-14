@@ -80,6 +80,22 @@ export interface ModelCapability {
    * Imagen does not expose it, and Gemini Omni rejects it outright.
    */
   supportsTemperature?: boolean;
+  /**
+   * Whether the model supports a video transform strength slider (0.1 to 1.0).
+   */
+  supportsTransformStrength?: boolean;
+  /**
+   * Whether the model supports configuring diffusion steps (e.g. 1 to 250).
+   */
+  supportsDiffusionSteps?: boolean;
+  /**
+   * Whether the model supports an optional inpainting mask video for localized edits.
+   */
+  supportsMask?: boolean;
+  /**
+   * Whether the model supports intermediate keyframe conditioning for multi-keyframe transform.
+   */
+  supportsConditioningFrames?: boolean;
 }
 
 export interface GenerationModelConfig {
@@ -293,6 +309,28 @@ export const MODEL_CONFIGS: GenerationModelConfig[] = [
       supportsLastFrame: false,
       supportsNegativePrompt: false,
       supportsVideoReference: false,
+      maxOutputs: 1,
+    },
+  },
+  {
+    value: 'veo-exp-video-transform',
+    viewValue: 'Veo Video Transform / Restyle',
+    type: 'VIDEO',
+    icon: 'auto_fix_high',
+    capabilities: {
+      supportedModes: ['Edit Video', 'Frames to Video'],
+      maxReferenceImages: 0,
+      supportedAspectRatios: ['16:9', '9:16'],
+      supportedResolutions: ['1K'],
+      supportedDurations: [4, 5, 6, 7, 8],
+      supportsAudio: true,
+      supportsVideoReference: true,
+      supportsLastFrame: true,
+      supportsMask: true,
+      supportsConditioningFrames: true,
+      supportsTransformStrength: true,
+      supportsDiffusionSteps: true,
+      supportsSeed: true,
       maxOutputs: 1,
     },
   },

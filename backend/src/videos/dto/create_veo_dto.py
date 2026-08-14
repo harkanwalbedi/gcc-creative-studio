@@ -86,6 +86,19 @@ class AssetReferenceDto(BaseDto):
     )
 
 
+class ConditioningFrameDto(BaseDto):
+    """An intermediate conditioning keyframe for multi-keyframe video transform."""
+
+    frame_number: int = Field(
+        ge=8,
+        le=184,
+        description="Frame position for conditioning (must be a multiple of 8, e.g. 8, 16, 24...)",
+    )
+    image_asset_id: AssetReferenceDto = Field(
+        description="Asset reference for the conditioning keyframe image.",
+    )
+
+
 class CreateVeoDto(BaseDto):
     """The refactored request model. Defaults are defined here to make the API
     contract explicit and self-documenting.
@@ -220,6 +233,32 @@ class CreateVeoDto(BaseDto):
         default="1K",
         description="Resolution of the generated videos.",
     )
+    video_transform_strength: float = Field(
+        default=0.5,
+        ge=0.01,
+        le=1.0,
+        description="Restyle intensity for video transform (0.1 to 1.0).",
+    )
+    num_diffusion_steps: int = Field(
+        default=20,
+        ge=1,
+        le=250,
+        description="Diffusion step count for video transform.",
+    )
+    seed: int | None = Field(
+        default=None,
+        ge=0,
+        le=4294967295,
+        description="Random seed for deterministic generation (0 to 4294967295).",
+    )
+    video_transform_mask_asset_id: AssetReferenceDto | None = Field(
+        default=None,
+        description="Optional grayscale mask video asset for localized inpainting.",
+    )
+    conditioning_frames: list[ConditioningFrameDto] | None = Field(
+        default=None,
+        description="Optional intermediate conditioning keyframes (at multiples of 8 frames) for keyframe-guided video transform.",
+    )
 
     @model_validator(mode="after")
     def validate_cross_fields(self) -> "CreateVeoDto":
@@ -265,6 +304,38 @@ class CreateVeoDto(BaseDto):
         start_image_present = bool(self.start_image_asset_id)
         end_image_present = bool(self.end_image_asset_id)
         source_video_present = bool(self.source_video_asset_id)
+
+        if model == GenerationModelEnum.VEO_EXP_VIDEO_TRANSFORM:
+            has_source_video = bool(
+                source_video_present
+                or self.edit_source
+                or (
+                    self.source_media_items
+                    and any(
+                        item.role
+                        in {
+                            AssetRoleEnum.VIDEO_EXTENSION_SOURCE,
+                            AssetRoleEnum.START_FRAME,
+                        }
+                        for item in self.source_media_items
+                    )
+                )
+                or start_image_present
+                or start_frame_role_present
+            )
+            if not has_source_video:
+                raise ValueError(
+                    "Video transform model requires an input video (or first frame image).",
+                )
+            if self.resolution != "1K":
+                raise ValueError(
+                    f"Video transform model only supports 1K resolution (720p), got '{self.resolution}'.",
+                )
+            if self.duration_seconds and self.duration_seconds > 8:
+                raise ValueError(
+                    f"Video transform model supports up to 8 seconds, got {self.duration_seconds}.",
+                )
+            return self
 
         if model == GenerationModelEnum.VEO_EXP_A2V_GENERATION:
             if (
@@ -508,6 +579,7 @@ class CreateVeoDto(BaseDto):
             GenerationModelEnum.VEO_3_FAST_PREVIEW,
             GenerationModelEnum.VEO_3_QUALITY_PREVIEW,
             GenerationModelEnum.VEO_EXP_A2V_GENERATION,
+            GenerationModelEnum.VEO_EXP_VIDEO_TRANSFORM,
         ]
         if value not in valid_video_models:
             raise ValueError("Invalid generation model for video.")

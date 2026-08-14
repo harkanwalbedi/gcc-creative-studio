@@ -59,6 +59,7 @@ class GenerationModelEnum(str, Enum):
     # Video-Specific Models
     GEMINI_OMNI_FLASH_PREVIEW = "gemini-omni-flash-preview"
     VEO_EXP_A2V_GENERATION = "veo-exp-a2v-generation"
+    VEO_EXP_VIDEO_TRANSFORM = "veo-exp-video-transform"
     # A VPE checkpoint, not a publisher model. Every VPE capability is reached
     # through the one "veo-experimental" endpoint and chosen by this name
     # inside the payload, so the checkpoint is what identifies the model that

@@ -418,3 +418,86 @@ def postprocess_dialogue_video(
             str(target),
         )
     return Path(target)
+
+
+def prepare_transform_video(
+    video_source: Path | str,
+    target: Path | str,
+    is_portrait: bool = False,
+) -> Path:
+    """Prepares an input video for video transform (<= 8s, 24 fps, 1280x720).
+
+    Pads portrait 9:16 videos with pillarboxes onto a 1280x720 canvas so
+    the model receives standard landscape frames.
+
+    Args:
+        video_source: Path to source input video.
+        target: Path to save normalized 1280x720 24fps video.
+        is_portrait: True if source video is 9:16 vertical.
+
+    Returns:
+        The target Path.
+    """
+    if is_portrait:
+        filter_str = "fps=24,scale=405:720,pad=1280:720:(1280-405)/2:0:black"
+    else:
+        filter_str = (
+            "fps=24,scale=1280:720:force_original_aspect_ratio=decrease,"
+            "pad=1280:720:(1280-iw)/2:(720-ih)/2:black"
+        )
+
+    _ffmpeg(
+        "-i",
+        str(video_source),
+        "-t",
+        "8",
+        "-vf",
+        filter_str,
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        str(target),
+    )
+    return Path(target)
+
+
+def postprocess_transform_video(
+    video_source: Path | str,
+    target: Path | str,
+    is_portrait: bool = False,
+) -> Path:
+    """Postprocesses transformed video output.
+
+    If portrait mode was requested, crops the active center 405x720 region
+    and scales it back to 720x1280 vertical video.
+
+    Args:
+        video_source: Path to raw 1280x720 transformed video.
+        target: Path to save the final video.
+        is_portrait: True if portrait post-cropping is required.
+
+    Returns:
+        The target Path.
+    """
+    if is_portrait:
+        _ffmpeg(
+            "-i",
+            str(video_source),
+            "-vf",
+            "crop=405:720:(1280-405)/2:0,scale=720:1280",
+            "-c:a",
+            "copy",
+            str(target),
+        )
+    else:
+        _ffmpeg(
+            "-i",
+            str(video_source),
+            "-c",
+            "copy",
+            str(target),
+        )
+    return Path(target)

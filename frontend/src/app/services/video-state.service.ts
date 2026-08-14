@@ -48,7 +48,12 @@ interface VideoState {
   referenceAudio: ReferenceAudio | null;
   /** The clip being modified in Edit Video mode. */
   editSource: ReferenceVideo | null;
+  /** Optional inpainting mask video for localized edits. */
+  maskSource?: ReferenceVideo | null;
   stripSourceAudio: boolean;
+  transformStrength?: number;
+  seed?: number | null;
+  numDiffusionSteps?: number;
 }
 
 @Injectable({
@@ -81,7 +86,11 @@ export class VideoStateService {
       referenceVideo: null,
       referenceAudio: null,
       editSource: null,
+      maskSource: null,
       stripSourceAudio: true,
+      transformStrength: 0.5,
+      seed: null,
+      numDiffusionSteps: 20,
     };
 
     let savedState: VideoState | null = null;
@@ -153,6 +162,9 @@ export class VideoStateService {
                 ? parsed.referenceAudio
                 : null,
               editSource: loadedEditSource,
+              transformStrength: parsed.transformStrength ?? 0.5,
+              seed: parsed.seed ?? null,
+              numDiffusionSteps: parsed.numDiffusionSteps ?? 20,
             };
           }
         }

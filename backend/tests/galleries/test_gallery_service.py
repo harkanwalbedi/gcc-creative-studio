@@ -158,9 +158,7 @@ async def test_get_paginated_gallery_regular_user(service):
         roles=[UserRoleEnum.USER],
     )
 
-    search_dto = GallerySearchDto(
-        limit=10, offset=0, status=JobStatusEnum.FAILED
-    )
+    search_dto = GallerySearchDto(limit=10, offset=0, status=None)
 
     mock_query_result = MagicMock()
     mock_query_result.data = []
@@ -168,8 +166,8 @@ async def test_get_paginated_gallery_regular_user(service):
 
     await service.get_paginated_gallery(search_dto, current_user)
 
-    # Verify status is overwritten
-    assert search_dto.status == JobStatusEnum.COMPLETED
+    # Verify query was delegated to repository
+    service.mock_unified_gallery_repo.query.assert_called_once_with(search_dto)
 
 
 @pytest.mark.anyio

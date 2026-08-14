@@ -100,6 +100,40 @@
             {{ temperature === null ? 'T auto' : 'T ' + temperature }}
           </button>
         }
+        <!--
+          Transform Strength is worth seeing at a glance while iterating on a video restyle,
+          so it sits with the other settings rather than only inside the popup.
+        -->
+        @if (supportsTransformStrength) {
+          <button
+            (click)="toggleSettingsMenu(); $event.stopPropagation()"
+            [matTooltip]="'Transform Strength: ' + transformStrength + ' (Click to adjust)'"
+            class="rounded-md bg-neutral-800 px-2 py-1 cursor-pointer hover:bg-neutral-700 font-mono text-xs text-blue-400 flex items-center gap-1"
+          >
+            <mat-icon class="!text-xs !h-3.5 !w-3.5 flex items-center justify-center">tune</mat-icon>
+            <span>{{ transformStrength }}</span>
+          </button>
+        }
+        @if (supportsDiffusionSteps) {
+          <button
+            (click)="toggleSettingsMenu(); $event.stopPropagation()"
+            [matTooltip]="'Diffusion Steps: ' + numDiffusionSteps + ' (Click to adjust)'"
+            class="rounded-md bg-neutral-800 px-2 py-1 cursor-pointer hover:bg-neutral-700 font-mono text-xs text-neutral-300 flex items-center gap-1"
+          >
+            <mat-icon class="!text-xs !h-3.5 !w-3.5 flex items-center justify-center text-neutral-400">stacked_line_chart</mat-icon>
+            <span>{{ numDiffusionSteps }} steps</span>
+          </button>
+        }
+        @if (supportsSeed) {
+          <button
+            (click)="toggleSettingsMenu(); $event.stopPropagation()"
+            [matTooltip]="seed === null ? 'Seed: Auto / Random (Click to set fixed seed)' : 'Seed: ' + seed + ' (Click to adjust)'"
+            class="rounded-md bg-neutral-800 px-2 py-1 cursor-pointer hover:bg-neutral-700 font-mono text-xs text-neutral-300 flex items-center gap-1"
+          >
+            <mat-icon class="!text-xs !h-3.5 !w-3.5 flex items-center justify-center text-neutral-400">casino</mat-icon>
+            <span>{{ seed === null ? 'Seed auto' : 'Seed ' + seed }}</span>
+          </button>
+        }
       </div>
     </div>
 
@@ -168,13 +202,58 @@
             </ng-container>
           </div>
 
+          <!-- Multiple Conditioning Frames for I2V Keyframes -->
+          <ng-container *ngIf="getSelectedModelObject()?.capabilities?.supportsConditioningFrames">
+            <!-- Intermediate Keyframes List -->
+            <div *ngFor="let kf of conditioningKeyframes; let kfIndex = index" class="relative h-20 w-20 rounded-xl border border-neutral-700 bg-neutral-800 overflow-hidden flex items-center justify-center group">
+              <img [src]="kf.previewUrl" class="h-full w-full object-cover" />
+              <!-- Clickable Frame Number Badge with Dropdown -->
+              <button
+                type="button"
+                [matMenuTriggerFor]="frameMenu"
+                (click)="$event.stopPropagation()"
+                class="absolute bottom-0 left-0 right-0 bg-neutral-900/90 hover:bg-blue-600 px-1 py-0.5 text-center text-[9px] font-mono text-blue-200 hover:text-white transition-colors cursor-pointer flex items-center justify-center gap-0.5"
+                matTooltip="Click to change frame number (multiple of 8)"
+              >
+                <span>#{{ kf.frameNumber }} ({{ (kf.frameNumber / 24).toFixed(1) }}s)</span>
+                <mat-icon class="!h-2.5 !w-2.5 !text-[10px] leading-none">arrow_drop_down</mat-icon>
+              </button>
+
+              <mat-menu #frameMenu="matMenu" class="max-h-60 overflow-y-auto">
+                <div class="px-3 py-1 text-[11px] font-semibold text-neutral-400 border-b border-neutral-700">
+                  Select Frame (Every 8th Frame)
+                </div>
+                <button
+                  *ngFor="let fn of validFrameNumbers"
+                  mat-menu-item
+                  (click)="kf.frameNumber = fn; keyframeFrameNumberChanged.emit({index: kfIndex, frameNumber: fn})"
+                  [class.text-blue-400]="kf.frameNumber === fn"
+                  class="text-xs"
+                >
+                  <span>Frame #{{ fn }} ({{ (fn / 24).toFixed(2) }}s)</span>
+                </button>
+              </mat-menu>
+
+              <button
+                (click)="$event.stopPropagation(); removeKeyframeClicked.emit(kfIndex)"
+                class="absolute -right-1 -top-1 rounded-full bg-neutral-900 p-0.5 text-neutral-400 hover:text-white"
+              >
+                <mat-icon class="!h-3 !w-3 text-xs">close</mat-icon>
+              </button>
+            </div>
+
+            <!-- Add Keyframe Button Slot -->
+            <div
+              class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-blue-500 hover:bg-neutral-700 flex flex-col items-center justify-center"
+              (click)="addKeyframeClicked.emit()"
+              matTooltip="Add intermediate conditioning frame (e.g. frame 8, 16, 24, 48, 128)"
+            >
+              <mat-icon class="text-neutral-400">add_photo_alternate</mat-icon>
+              <span class="absolute bottom-1 text-[8px] text-neutral-400 text-center leading-tight">+ Frame</span>
+            </div>
+          </ng-container>
+
           <!-- Arrow: Shown only if we have a second slot -->
-          <!--
-            Slot 2 is a closing frame in Frames to Video and a second clip in
-            Concatenate. Gemini Omni cannot interpolate between two frames and
-            the backend rejects an end frame outright, so offering the slot only
-            invited a 422.
-          -->
           <mat-icon *ngIf="showSecondSlot" class="text-neutral-500">compare_arrows</mat-icon>
 
           <div
@@ -183,9 +262,11 @@
             (click)="openImageSelector.emit(2)"
             (dragover)="$event.preventDefault()"
             (drop)="$event.preventDefault(); openImageSelector.emit(2)"
+            matTooltip="Optional closing frame (last frame)"
           >
             <ng-container *ngIf="!image2Preview">
               <mat-icon class="text-neutral-500">add</mat-icon>
+              <span class="absolute bottom-1 text-[8px] text-neutral-500">Last Frame</span>
             </ng-container>
             <ng-container *ngIf="image2Preview">
               <div class="group absolute inset-0 rounded-lg overflow-hidden">
@@ -221,23 +302,45 @@
               </button>
             </ng-container>
           </div>
-          <div class="w-full text-[11px] text-neutral-500">
-            Describe only what should change. Adding
-            <span class="font-mono text-neutral-400">Keep everything else the same</span>
-            helps preserve the rest of the shot.
+
+          <!-- Optional Inpainting Mask slot for Video Transform -->
+          <div
+            *ngIf="getSelectedModelObject()?.capabilities?.supportsMask"
+            class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-blue-500 hover:bg-neutral-700 flex flex-col items-center justify-center group"
+            (click)="!maskSource && openVideoSelectorForMask.emit()"
+            [matTooltip]="maskSource ? 'Inpainting mask attached' : 'Upload or select mask video'"
+          >
+            <ng-container *ngIf="!maskSource">
+              <mat-icon class="text-neutral-400 group-hover:text-blue-400 transition-colors">cloud_upload</mat-icon>
+              <span class="absolute bottom-1 text-[8px] text-neutral-400 text-center leading-tight">
+                Upload Mask
+              </span>
+            </ng-container>
+            <ng-container *ngIf="maskSource">
+              <img *ngIf="maskSource.previewUrl" [src]="maskSource.previewUrl"
+                class="h-full w-full rounded-lg object-cover" />
+              <button (click)="$event.stopPropagation(); clearMaskSource.emit($event)"
+                class="absolute -right-1 -top-1 rounded-full bg-neutral-900 p-0.5 text-neutral-400 hover:text-white">
+                <mat-icon class="!h-3 !w-3 text-xs">close</mat-icon>
+              </button>
+            </ng-container>
           </div>
-          <!--
-            Omni refuses to edit a clip containing speech when reference images
-            are also supplied, and its own output always has audio, so this
-            defaults on.
-          -->
-          <label class="flex w-full cursor-pointer items-center gap-2 text-[11px] text-neutral-400">
-            <input type="checkbox" [checked]="stripSourceAudio"
-              (change)="stripSourceAudioChanged.emit(!stripSourceAudio)"
-              class="h-3 w-3 accent-blue-600" />
-            Remove audio from the source clip
-            <span class="text-neutral-600">(needed when using reference images)</span>
-          </label>
+
+          <!-- Gemini Omni specific prompt tips -->
+          <ng-container *ngIf="!supportsTransformStrength">
+            <div class="w-full text-[11px] text-neutral-500">
+              Describe only what should change. Adding
+              <span class="font-mono text-neutral-400">Keep everything else the same</span>
+              helps preserve the rest of the shot.
+            </div>
+            <label class="flex w-full cursor-pointer items-center gap-2 text-[11px] text-neutral-400">
+              <input type="checkbox" [checked]="stripSourceAudio"
+                (change)="stripSourceAudioChanged.emit(!stripSourceAudio)"
+                class="h-3 w-3 accent-blue-600" />
+              Remove audio from the source clip
+              <span class="text-neutral-600">(needed when using reference images)</span>
+            </label>
+          </ng-container>
         </ng-container>
 
         <!--
@@ -247,49 +350,51 @@
         -->
         <ng-container *ngIf="mode === 'Ingredients to Video' || mode === 'Ingredients to Image' || mode === 'Edit Video' || (mode === 'Frames to Video' && supportsFramePlusReferences)">
           <ng-container *ngIf="getSelectedModelObject() as model">
-            <div
-              class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-neutral-500 hover:bg-neutral-700 flex items-center justify-center"
-              [class.opacity-50]="referenceImages.length >= model.capabilities.maxReferenceImages"
-              (click)="referenceImages.length < model.capabilities.maxReferenceImages && openImageSelectorForReference.emit()"
-              (dragover)="$event.preventDefault()"
-              (drop)="$event.preventDefault(); onReferenceImageDrop.emit($event)"
-            >
-              <mat-icon class="text-neutral-500">add</mat-icon>
-              <span class="absolute bottom-0 text-[10px] text-neutral-500">{{ referenceImages.length }}/{{
-                model.capabilities.maxReferenceImages }}</span>
+            <ng-container *ngIf="model.capabilities.maxReferenceImages > 0">
+              <div
+                class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-neutral-500 hover:bg-neutral-700 flex items-center justify-center"
+                [class.opacity-50]="referenceImages.length >= model.capabilities.maxReferenceImages"
+                (click)="referenceImages.length < model.capabilities.maxReferenceImages && openImageSelectorForReference.emit()"
+                (dragover)="$event.preventDefault()"
+                (drop)="$event.preventDefault(); onReferenceImageDrop.emit($event)"
+              >
+                <mat-icon class="text-neutral-500">add</mat-icon>
+                <span class="absolute bottom-0 text-[10px] text-neutral-500">{{ referenceImages.length }}/{{
+                  model.capabilities.maxReferenceImages }}</span>
+                </div>
+                <!-- Show small previews of reference images -->
+              <div class="flex flex-wrap gap-1">
+                <div *ngFor="let ref of referenceImages; let i = index" class="relative h-12 w-12 flex-shrink-0 group rounded-lg overflow-hidden"
+                  [class.highlight-new]="ref.isNew">
+                  <img [src]="ref.previewUrl" class="h-full w-full object-cover" />
+                  <ng-container *ngTemplateOutlet="editOverlay; context: { index: i, ref: ref, small: true }"></ng-container>
+                  <!--
+                    The tag index is otherwise invisible: references are bound by
+                    position, so a user would have to count thumbnails and type
+                    the tag by hand. Clicking inserts it at the caret.
+                  -->
+                  <button *ngIf="supportsRoleTags"
+                    (click)="$event.stopPropagation(); insertRoleTag('<IMAGE_REF_' + (i + roleTagOffset) + '>')"
+                    [matTooltip]="'Insert <IMAGE_REF_' + (i + roleTagOffset) + '> into the prompt to refer to this image'"
+                    class="absolute bottom-0 left-0 rounded-tr-md bg-neutral-900/80 px-1 text-[10px] font-mono text-neutral-300 hover:bg-blue-600 hover:text-white">
+                    {{ i + roleTagOffset }}
+                  </button>
+                  <button (click)="$event.stopPropagation(); clearReferenceImage.emit({index: i, event: $event})"
+                    class="absolute -right-1 -top-1 rounded-full bg-neutral-900 p-0.5 text-neutral-400 hover:text-white">
+                    <mat-icon class="!h-3 !w-3 text-xs">close</mat-icon>
+                  </button>
+                </div>
               </div>
-              <!-- Show small previews of reference images -->
-            <div class="flex flex-wrap gap-1">
-              <div *ngFor="let ref of referenceImages; let i = index" class="relative h-12 w-12 flex-shrink-0 group rounded-lg overflow-hidden"
-                [class.highlight-new]="ref.isNew">
-                <img [src]="ref.previewUrl" class="h-full w-full object-cover" />
-                <ng-container *ngTemplateOutlet="editOverlay; context: { index: i, ref: ref, small: true }"></ng-container>
-                <!--
-                  The tag index is otherwise invisible: references are bound by
-                  position, so a user would have to count thumbnails and type
-                  the tag by hand. Clicking inserts it at the caret.
-                -->
-                <button *ngIf="supportsRoleTags"
-                  (click)="$event.stopPropagation(); insertRoleTag('<IMAGE_REF_' + (i + roleTagOffset) + '>')"
-                  [matTooltip]="'Insert <IMAGE_REF_' + (i + roleTagOffset) + '> into the prompt to refer to this image'"
-                  class="absolute bottom-0 left-0 rounded-tr-md bg-neutral-900/80 px-1 text-[10px] font-mono text-neutral-300 hover:bg-blue-600 hover:text-white">
-                  {{ i + roleTagOffset }}
-                </button>
-                <button (click)="$event.stopPropagation(); clearReferenceImage.emit({index: i, event: $event})"
-                  class="absolute -right-1 -top-1 rounded-full bg-neutral-900 p-0.5 text-neutral-400 hover:text-white">
-                  <mat-icon class="!h-3 !w-3 text-xs">close</mat-icon>
-                </button>
+              <!-- Discoverability: the tag syntax is not guessable. -->
+              <div *ngIf="supportsRoleTags && referenceImages.length > 1"
+                class="w-full text-[11px] text-neutral-500">
+                Tip: click an image's number to insert its tag, e.g.
+                <span class="font-mono text-neutral-400">&lt;IMAGE_REF_0&gt; wears &lt;IMAGE_REF_1&gt;</span>,
+                to control which reference is which. An opening frame counts as
+                <span class="font-mono text-neutral-400">&lt;IMAGE_REF_0&gt;</span>,
+                so the references after it start at 1.
               </div>
-            </div>
-            <!-- Discoverability: the tag syntax is not guessable. -->
-            <div *ngIf="supportsRoleTags && referenceImages.length > 1"
-              class="w-full text-[11px] text-neutral-500">
-              Tip: click an image's number to insert its tag, e.g.
-              <span class="font-mono text-neutral-400">&lt;IMAGE_REF_0&gt; wears &lt;IMAGE_REF_1&gt;</span>,
-              to control which reference is which. An opening frame counts as
-              <span class="font-mono text-neutral-400">&lt;IMAGE_REF_0&gt;</span>,
-              so the references after it start at 1.
-            </div>
+            </ng-container>
           </ng-container>
 
             <!-- Video Reference Slot, gated on capability rather than model name. -->
@@ -607,6 +712,91 @@
             </div>
             <p class="mt-1 text-[10px] text-neutral-600">
               Lower stays closer to the prompt and references — useful when editing.
+            </p>
+          </div>
+        }
+
+        <!-- Transform Strength: Veo Video Transform models only -->
+        @if (supportsTransformStrength) {
+          <div class="relative">
+            <label for="transformStrengthMenu" class="block text-xs font-medium text-neutral-400 mb-1.5">
+              Transform Strength
+            </label>
+            <div class="flex items-center gap-2">
+              <input id="transformStrengthMenu" type="range" min="0.1" max="1.0" step="0.05"
+                [value]="transformStrength"
+                (input)="onTransformStrengthInput($event)"
+                class="h-1 w-28 cursor-pointer accent-blue-600" />
+              <span class="w-8 text-right font-mono text-xs text-blue-400">
+                {{ transformStrength }}
+              </span>
+              <button *ngIf="transformStrength !== 0.5"
+                (click)="transformStrengthChanged.emit(0.5)"
+                matTooltip="Reset to default (0.5)"
+                class="text-[10px] text-neutral-500 hover:text-neutral-300">reset</button>
+            </div>
+            <p class="mt-1 text-[10px] text-neutral-600">
+              {{ transformStrength < 0.36 ? 'Subtle restyle / strict structure' : transformStrength < 0.7 ? 'Moderate restyle / style transfer' : 'Heavy structural transformation' }}
+            </p>
+          </div>
+        }
+
+        <!-- Diffusion Steps: Models supporting steps configuration -->
+        @if (supportsDiffusionSteps) {
+          <div class="relative">
+            <label for="diffusionStepsMenu" class="block text-xs font-medium text-neutral-400 mb-1.5">
+              Diffusion Steps
+            </label>
+            <div class="flex items-center gap-2">
+              <input id="diffusionStepsMenu" type="range" min="1" max="250" step="1"
+                [value]="numDiffusionSteps"
+                (input)="onNumDiffusionStepsInput($event)"
+                class="h-1 w-28 cursor-pointer accent-blue-600" />
+              <span class="w-8 text-right font-mono text-xs text-blue-400">
+                {{ numDiffusionSteps }}
+              </span>
+              <button *ngIf="numDiffusionSteps !== 20"
+                (click)="numDiffusionStepsChanged.emit(20)"
+                matTooltip="Reset to default (20)"
+                class="text-[10px] text-neutral-500 hover:text-neutral-300">reset</button>
+            </div>
+            <p class="mt-1 text-[10px] text-neutral-600">
+              Higher steps refine details and quality (1-250, default 20).
+            </p>
+          </div>
+        }
+
+        <!-- Seed: Models supporting seed control -->
+        @if (supportsSeed) {
+          <div class="relative">
+            <label for="seedInputMenu" class="block text-xs font-medium text-neutral-400 mb-1.5">
+              Seed
+            </label>
+            <div class="flex items-center gap-2">
+              <input
+                id="seedInputMenu"
+                type="number"
+                min="0"
+                max="4294967295"
+                [placeholder]="'Random / Auto'"
+                [value]="seed ?? ''"
+                (input)="onSeedInput($event)"
+                class="w-32 rounded bg-neutral-800 px-2 py-1 text-xs font-mono text-neutral-200 border border-neutral-700 focus:border-blue-500 focus:outline-none"
+              />
+              <button
+                (click)="randomizeSeed()"
+                matTooltip="Generate random seed"
+                class="p-1 rounded hover:bg-neutral-600 text-neutral-400 hover:text-white"
+              >
+                <mat-icon class="!h-4 !w-4 !text-sm flex items-center justify-center">shuffle</mat-icon>
+              </button>
+              <button *ngIf="seed !== null"
+                (click)="seedChanged.emit(null)"
+                matTooltip="Reset to auto/random"
+                class="text-[10px] text-neutral-500 hover:text-neutral-300">reset</button>
+            </div>
+            <p class="mt-1 text-[10px] text-neutral-600">
+              Set fixed seed for deterministic reproducibility.
             </p>
           </div>
         }

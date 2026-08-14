@@ -128,7 +128,7 @@
   <p class="text-right">{{ mediaItem.duration }}s</p>
 </div>
 
-                <div *ngIf="mediaItem.aspectRatio" class="contents">
+                <div *ngIf="mediaItem?.aspectRatio" class="contents">
                   <strong class="font-semibold text-gray-400">Aspect Ratio:</strong>
                   <p class="text-right">
                     {{ mediaItem.aspectRatio }}
@@ -137,6 +137,38 @@
                 <div *ngIf="mediaItem?.resolution" class="contents">
                   <strong class="font-semibold text-gray-400">Resolution:</strong>
                   <p class="text-right">{{ mediaItem.resolution }}</p>
+                </div>
+                <div *ngIf="$any(mediaItem)?.rawData?.['video_transform_strength'] !== undefined || $any(mediaItem)?.videoTransformStrength !== undefined" class="contents">
+                  <strong class="font-semibold text-gray-400">Transform Strength:</strong>
+                  <p class="text-right font-mono text-blue-400">{{ $any(mediaItem)?.videoTransformStrength ?? $any(mediaItem)?.rawData?.['video_transform_strength'] }}</p>
+                </div>
+                <div *ngIf="$any(mediaItem)?.rawData?.['num_diffusion_steps'] !== undefined || $any(mediaItem)?.numDiffusionSteps !== undefined" class="contents">
+                  <strong class="font-semibold text-gray-400">Diffusion Steps:</strong>
+                  <p class="text-right font-mono">{{ $any(mediaItem)?.numDiffusionSteps ?? $any(mediaItem)?.rawData?.['num_diffusion_steps'] }}</p>
+                </div>
+                <div *ngIf="$any(mediaItem)?.rawData?.['temperature'] !== undefined" class="contents">
+                  <strong class="font-semibold text-gray-400">Temperature:</strong>
+                  <p class="text-right font-mono">{{ $any(mediaItem)?.rawData?.['temperature'] }}</p>
+                </div>
+                <div *ngIf="mediaItem.style" class="contents">
+                  <strong class="font-semibold text-gray-400">Style:</strong>
+                  <p class="text-right">{{ mediaItem.style }}</p>
+                </div>
+                <div *ngIf="mediaItem.lighting" class="contents">
+                  <strong class="font-semibold text-gray-400">Lighting:</strong>
+                  <p class="text-right">{{ mediaItem.lighting }}</p>
+                </div>
+                <div *ngIf="mediaItem.colorAndTone" class="contents">
+                  <strong class="font-semibold text-gray-400">Color & Tone:</strong>
+                  <p class="text-right">{{ mediaItem.colorAndTone }}</p>
+                </div>
+                <div *ngIf="mediaItem.composition" class="contents">
+                  <strong class="font-semibold text-gray-400">Composition:</strong>
+                  <p class="text-right">{{ mediaItem.composition }}</p>
+                </div>
+                <div *ngIf="mediaItem.negativePrompt" class="contents">
+                  <strong class="font-semibold text-gray-400">Negative Prompt:</strong>
+                  <p class="text-right break-words">{{ mediaItem.negativePrompt }}</p>
                 </div>
                 <div *ngIf="mediaItem?.googleSearch !== undefined" class="contents">
                   <strong class="font-semibold text-gray-400">Google Search:</strong>

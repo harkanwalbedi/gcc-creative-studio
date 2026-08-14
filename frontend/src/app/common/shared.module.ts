@@ -43,6 +43,7 @@ import {WorkspaceSwitcherComponent} from './components/workspace-switcher/worksp
 import {BrandGuidelineDialogComponent} from './components/brand-guideline-dialog/brand-guideline-dialog.component';
 import {TagsManagementDialogComponent} from './components/tags-management-dialog/tags-management-dialog.component';
 import {VpeUpscaleDialogComponent} from './components/vpe-upscale-dialog/vpe-upscale-dialog.component';
+import {SamMaskDialogComponent} from './components/sam-mask-dialog/sam-mask-dialog.component';
 import {MatProgressSpinnerModule} from '@angular/material/progress-spinner';
 import {MarkdownModule} from 'ngx-markdown';
 import {GalleryItemOverlayComponent} from './components/gallery-item-overlay/gallery-item-overlay.component';
@@ -75,6 +76,7 @@ const DECLARATIONS = [
   TruncatePipe,
   TagsManagementDialogComponent,
   VpeUpscaleDialogComponent,
+  SamMaskDialogComponent,
 ];
 
 const MODULES = [

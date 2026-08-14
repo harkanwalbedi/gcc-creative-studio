@@ -1022,11 +1022,12 @@ def _build_video_transform(
         )
     _set_if(parameters, "seed", request.seed)
     _set_if(parameters, "compressionQuality", request.compression_quality)
-    _set_if(
-        experiments,
-        "videoTransformStrength",
-        request.video_transform_strength,
-    )
+    if request.video is not None:
+        _set_if(
+            experiments,
+            "videoTransformStrength",
+            request.video_transform_strength,
+        )
     _set_if(experiments, "numDiffusionSteps", request.num_diffusion_steps)
     _set_if(experiments, "codec", request.codec)
     _set_if(

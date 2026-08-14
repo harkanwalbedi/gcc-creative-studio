@@ -1940,6 +1940,20 @@ class VeoService:
                 request_dto=request_dto,
                 user_email=user.email,
             )
+        elif (
+            request_dto.generation_model
+            == GenerationModelEnum.VEO_EXP_VIDEO_TRANSFORM
+        ):
+            from src.videos.vpe_service import (  # pylint: disable=import-outside-toplevel
+                _process_vpe_transform_in_background,
+            )
+
+            executor.submit(
+                _process_vpe_transform_in_background,
+                media_item_id=placeholder_item.id,
+                request_dto=request_dto,
+                user_email=user.email,
+            )
         else:
             executor.submit(
                 _process_video_in_background,
