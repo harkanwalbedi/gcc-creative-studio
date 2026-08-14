@@ -439,3 +439,89 @@ def test_edit_source_rejects_a_start_frame():
             start_image_asset_id={"id": 9, "type": "source_asset"},
         )
     assert "start frame" in str(exc_info.value)
+
+
+def test_dialogue_model_valid():
+    dto = CreateVeoDto(
+        prompt="Character speaking in tavern",
+        workspace_id=1,
+        generation_model=GenerationModelEnum.VEO_EXP_A2V_GENERATION,
+        start_image_asset_id={"id": 1, "type": "source_asset"},
+        reference_audio={"id": 2, "type": "source_asset"},
+        duration_seconds=8,
+        resolution="1K",
+    )
+    assert dto.generation_model == GenerationModelEnum.VEO_EXP_A2V_GENERATION
+    assert dto.duration_seconds == 8
+    assert dto.resolution == "1K"
+
+
+def test_dialogue_model_missing_audio():
+    with pytest.raises(ValidationError) as exc_info:
+        CreateVeoDto(
+            prompt="Character speaking in tavern",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.VEO_EXP_A2V_GENERATION,
+            start_image_asset_id={"id": 1, "type": "source_asset"},
+            duration_seconds=8,
+            resolution="1K",
+        )
+    assert "requires a reference audio track" in str(exc_info.value)
+
+
+def test_dialogue_model_missing_image():
+    with pytest.raises(ValidationError) as exc_info:
+        CreateVeoDto(
+            prompt="Character speaking in tavern",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.VEO_EXP_A2V_GENERATION,
+            reference_audio={"id": 2, "type": "source_asset"},
+            duration_seconds=8,
+            resolution="1K",
+        )
+    assert "requires a character image" in str(exc_info.value)
+
+
+def test_dialogue_model_invalid_duration():
+    with pytest.raises(ValidationError) as exc_info:
+        CreateVeoDto(
+            prompt="Character speaking in tavern",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.VEO_EXP_A2V_GENERATION,
+            start_image_asset_id={"id": 1, "type": "source_asset"},
+            reference_audio={"id": 2, "type": "source_asset"},
+            duration_seconds=6,
+            resolution="1K",
+        )
+    assert "8-second duration" in str(exc_info.value)
+
+
+def test_dialogue_model_invalid_resolution():
+    with pytest.raises(ValidationError) as exc_info:
+        CreateVeoDto(
+            prompt="Character speaking in tavern",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.VEO_EXP_A2V_GENERATION,
+            start_image_asset_id={"id": 1, "type": "source_asset"},
+            reference_audio={"id": 2, "type": "source_asset"},
+            duration_seconds=8,
+            resolution="4K",
+        )
+    assert "1K resolution" in str(exc_info.value)
+
+
+def test_dialogue_model_conflicting_inputs():
+    with pytest.raises(ValidationError) as exc_info:
+        CreateVeoDto(
+            prompt="Character speaking in tavern",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.VEO_EXP_A2V_GENERATION,
+            start_image_asset_id={"id": 1, "type": "source_asset"},
+            reference_audio={"id": 2, "type": "source_asset"},
+            end_image_asset_id={"id": 3, "type": "source_asset"},
+            duration_seconds=8,
+            resolution="1K",
+        )
+    assert "only supports an image input and an audio reference" in str(
+        exc_info.value
+    )

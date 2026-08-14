@@ -278,6 +278,25 @@ export const MODEL_CONFIGS: GenerationModelConfig[] = [
   },
   // --- Video Models ---
   {
+    value: 'veo-exp-a2v-generation',
+    viewValue: 'Veo Dialogue Lip Sync',
+    type: 'VIDEO',
+    icon: 'record_voice_over',
+    capabilities: {
+      supportedModes: ['Ingredients to Video'],
+      maxReferenceImages: 1,
+      supportedAspectRatios: ['16:9', '9:16'],
+      supportedResolutions: ['1K'],
+      supportedDurations: [8],
+      supportsAudio: true,
+      supportsAudioReference: true,
+      supportsLastFrame: false,
+      supportsNegativePrompt: false,
+      supportsVideoReference: false,
+      maxOutputs: 1,
+    },
+  },
+  {
     value: 'gemini-omni-flash-preview',
     viewValue: 'Gemini Omni Flash',
     type: 'VIDEO',

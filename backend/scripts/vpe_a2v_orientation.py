@@ -257,11 +257,33 @@ def _upload(local: Path, bucket: str, prefix: str) -> str:
     Raises:
         RuntimeError: If the copy fails.
     """
-    uri = f"{bucket.rstrip('/')}/{prefix}/{local.name}"
-    code, out = _run(["gcloud", "storage", "cp", str(local), uri])
-    if code != 0:
-        raise RuntimeError(f"upload failed for {local.name}: {out}")
-    return uri
+    bucket_name = bucket.replace("gs://", "").strip("/")
+    blob_name = f"{prefix}/{local.name}"
+    try:
+        from google.cloud import (
+            storage,
+        )  # pylint: disable=import-outside-toplevel
+
+        client = storage.Client()
+        b = client.bucket(bucket_name)
+        blob = b.blob(blob_name)
+        blob.upload_from_filename(str(local), content_type=_mime_for(local))
+        return f"gs://{bucket_name}/{blob_name}"
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        code, out = _run(
+            [
+                "gcloud",
+                "storage",
+                "cp",
+                str(local),
+                f"gs://{bucket_name}/{blob_name}",
+            ]
+        )
+        if code != 0:
+            raise RuntimeError(
+                f"upload failed for {local.name}: {exc} (fallback: {out})"
+            ) from exc
+        return f"gs://{bucket_name}/{blob_name}"
 
 
 def _build(
@@ -334,7 +356,26 @@ def _generate(
 
     if arm.output_uri:
         try:
-            arm.out_width, arm.out_height = _probe_dimensions(arm.output_uri)
+            if arm.output_uri.startswith("gs://"):
+                from google.cloud import (
+                    storage,
+                )  # pylint: disable=import-outside-toplevel
+                import tempfile  # pylint: disable=import-outside-toplevel
+
+                parts = arm.output_uri.replace("gs://", "").split("/", 1)
+                storage_client = storage.Client()
+                b = storage_client.bucket(parts[0])
+                blob = b.blob(parts[1])
+                with tempfile.NamedTemporaryFile(
+                    suffix=".mp4", delete=False
+                ) as tmp:
+                    blob.download_to_filename(tmp.name)
+                    arm.out_width, arm.out_height = _probe_dimensions(tmp.name)
+                    Path(tmp.name).unlink(missing_ok=True)
+            else:
+                arm.out_width, arm.out_height = _probe_dimensions(
+                    arm.output_uri
+                )
         except RuntimeError as exc:
             arm.error = str(exc)
     return arm

@@ -338,6 +338,15 @@
                 </button>
               </ng-container>
             </div>
+
+            <!-- Dialogue Lip Sync Portrait note -->
+            <div *ngIf="mode === 'Ingredients to Video' && getSelectedModelObject()?.value === 'veo-exp-a2v-generation'"
+              class="w-full mt-2 flex items-start gap-1.5 text-[11px] text-neutral-400 leading-relaxed">
+              <mat-icon class="!h-4 !w-4 !text-[15px] !leading-none text-blue-400 flex-shrink-0 mt-0.5">info</mat-icon>
+              <span class="flex-1">
+                <strong class="text-neutral-300">Portrait (9:16) Workflow:</strong> The model renders natively in 16:9; portrait stills are automatically padded with black pillarboxes and center-cropped post-generation to deliver a seamless vertical video.
+              </span>
+            </div>
         </ng-container>
         </div>
 

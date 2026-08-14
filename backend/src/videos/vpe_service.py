@@ -45,6 +45,7 @@ import logging
 import os
 import shutil
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -53,7 +54,11 @@ from fastapi import Depends, HTTPException
 from google.cloud.logging import Client as LoggerClient
 from google.cloud.logging.handlers import CloudLoggingHandler
 
-from src.common.base_dto import GenerationModelEnum, MimeTypeEnum
+from src.common.base_dto import (
+    AspectRatioEnum,
+    GenerationModelEnum,
+    MimeTypeEnum,
+)
 from src.common.media_utils import generate_thumbnail
 from src.common.schema.media_item_model import (
     AssetRoleEnum,
@@ -63,12 +68,14 @@ from src.common.schema.media_item_model import (
 )
 from src.common.storage_service import GcsService
 from src.config.config_service import ConfigService, config_service
+from src.database import WorkerDatabase
 from src.galleries.dto.gallery_response_dto import MediaItemResponse
 from src.images.repository.media_item_repository import MediaRepository
 from src.source_assets.repository.source_asset_repository import (
     SourceAssetRepository,
 )
 from src.users.user_model import UserModel
+from src.videos.dto.create_veo_dto import CreateVeoDto
 from src.videos.dto.upscale_video_dto import UpscaleVideoDto
 from src.videos.veo_service import (
     build_measured_metadata,
@@ -79,11 +86,14 @@ from src.videos.vpe.capabilities import (
     VpeUpscaleResolution,
     get_capability,
 )
-from src.videos.vpe.client import VpeClient
+from src.videos.vpe.client import VpeClient, parse_result
 from src.videos.vpe.gating import VpeScreeningResult, screen_stored_video
 from src.videos.vpe.media_ops import (
     concat_segments,
     cut_segment,
+    postprocess_dialogue_video,
+    prepare_dialogue_audio,
+    prepare_dialogue_frame,
     restore_audio,
 )
 from src.videos.vpe.payloads import VpeMediaRef, VpeRequest, build_payload
@@ -699,6 +709,377 @@ def _discard_segments(
             vpe_gcs.delete_blob_from_uri(uri)
         except Exception as error:  # noqa: BLE001
             worker_logger.warning("Could not delete %s: %s", uri, error)
+
+
+def _process_vpe_dialogue_in_background(  # noqa: PLR0915
+    media_item_id: int,
+    request_dto: CreateVeoDto,
+    user_email: str,
+) -> None:
+    """Background worker that generates a dialogue-driven lip-sync video.
+
+    Args:
+        media_item_id: The MediaItem row to update with progress and results.
+        request_dto: Request parameters including image, audio, prompt, and ratio.
+        user_email: Requesting user email.
+    """
+    worker_logger = logging.getLogger(f"vpe_dialogue_worker.{media_item_id}")
+    worker_logger.setLevel(logging.INFO)
+    if worker_logger.hasHandlers():
+        worker_logger.handlers.clear()
+
+    if os.getenv("ENVIRONMENT") == "production":
+        handler = CloudLoggingHandler(
+            LoggerClient(),
+            name=f"vpe_dialogue_worker.{media_item_id}",
+        )
+    else:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s - [VPE_DIALOGUE_WORKER] - %(levelname)s - %(message)s",
+            ),
+        )
+    worker_logger.addHandler(handler)
+
+    temp_dir = tempfile.mkdtemp(prefix=f"vpe_dialogue_{media_item_id}_")
+
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def _async_worker():
+            async with WorkerDatabase() as db_factory:
+                async with db_factory() as db:
+                    media_repo = MediaRepository(db)
+                    source_asset_repo = SourceAssetRepository(db)
+                    cfg = config_service
+                    app_gcs = GcsService()
+                    vpe_gcs = GcsService(bucket_name=cfg.VPE_BUCKET)
+                    client = VpeClient(project_id=cfg.VPE_PROJECT_ID)
+
+                    try:
+                        await record_worker_progress(
+                            media_repo,
+                            media_item_id,
+                            worker_logger,
+                        )
+                        require_vpe_configured(cfg)
+                        start_time = time.monotonic()
+                        work = Path(temp_dir)
+                        work.mkdir(parents=True, exist_ok=True)
+
+                        # 1. Resolve & Download input image
+                        image_gcs_uri = None
+                        if request_dto.start_image_asset_id:
+                            ref = request_dto.start_image_asset_id
+                            if ref.type == "media_item":
+                                parent_item = await media_repo.get_by_id(ref.id)
+                                if parent_item and parent_item.gcs_uris:
+                                    image_gcs_uri = parent_item.gcs_uris[
+                                        ref.index or 0
+                                    ]
+                            else:
+                                asset = await source_asset_repo.get_by_id(
+                                    ref.id
+                                )
+                                if asset:
+                                    image_gcs_uri = asset.gcs_uri
+                        elif request_dto.reference_images:
+                            ref_img = request_dto.reference_images[0]
+                            asset = await source_asset_repo.get_by_id(
+                                ref_img.asset_id
+                            )
+                            if asset:
+                                image_gcs_uri = asset.gcs_uri
+                        elif request_dto.source_media_items:
+                            for smi in request_dto.source_media_items:
+                                if smi.role in {
+                                    AssetRoleEnum.START_FRAME,
+                                    AssetRoleEnum.IMAGE_REFERENCE_ASSET,
+                                }:
+                                    parent_item = await media_repo.get_by_id(
+                                        smi.media_item_id
+                                    )
+                                    if parent_item and parent_item.gcs_uris:
+                                        image_gcs_uri = parent_item.gcs_uris[
+                                            smi.media_index
+                                        ]
+                                        break
+
+                        if not image_gcs_uri:
+                            raise VpeJobError(
+                                "No input image could be resolved for dialogue generation.",
+                            )
+
+                        local_raw_image = work / "input_image_raw.png"
+                        downloaded = await asyncio.to_thread(
+                            app_gcs.download_from_gcs,
+                            gcs_uri_path=_blob_path(image_gcs_uri),
+                            destination_file_path=str(local_raw_image),
+                        )
+                        if not downloaded:
+                            await asyncio.to_thread(
+                                vpe_gcs.download_from_gcs,
+                                gcs_uri_path=_blob_path(image_gcs_uri),
+                                destination_file_path=str(local_raw_image),
+                            )
+
+                        # 2. Resolve & Download input audio
+                        if not request_dto.reference_audio:
+                            raise VpeJobError(
+                                "No reference audio was provided for dialogue generation.",
+                            )
+
+                        audio_ref = request_dto.reference_audio
+                        audio_gcs_uri = None
+                        if audio_ref.type == "media_item":
+                            parent_item = await media_repo.get_by_id(
+                                audio_ref.id
+                            )
+                            if parent_item and parent_item.gcs_uris:
+                                audio_gcs_uri = parent_item.gcs_uris[
+                                    audio_ref.index or 0
+                                ]
+                        else:
+                            asset = await source_asset_repo.get_by_id(
+                                audio_ref.id
+                            )
+                            if asset:
+                                audio_gcs_uri = asset.gcs_uri
+
+                        if not audio_gcs_uri:
+                            raise VpeJobError(
+                                "No audio track could be resolved for dialogue generation.",
+                            )
+
+                        local_raw_audio = work / "input_audio_raw"
+                        downloaded = await asyncio.to_thread(
+                            app_gcs.download_from_gcs,
+                            gcs_uri_path=_blob_path(audio_gcs_uri),
+                            destination_file_path=str(local_raw_audio),
+                        )
+                        if not downloaded:
+                            await asyncio.to_thread(
+                                vpe_gcs.download_from_gcs,
+                                gcs_uri_path=_blob_path(audio_gcs_uri),
+                                destination_file_path=str(local_raw_audio),
+                            )
+
+                        # 3. Transcode/Prepare audio & image
+                        is_portrait = (
+                            request_dto.aspect_ratio
+                            == AspectRatioEnum.RATIO_9_16
+                        )
+                        local_norm_audio = work / "audio_8s.wav"
+                        local_norm_frame = work / "frame_1280x720.png"
+
+                        await asyncio.to_thread(
+                            prepare_dialogue_audio,
+                            local_raw_audio,
+                            local_norm_audio,
+                        )
+                        await asyncio.to_thread(
+                            prepare_dialogue_frame,
+                            local_raw_image,
+                            local_norm_frame,
+                            is_portrait=is_portrait,
+                        )
+
+                        # 4. Upload staged inputs to VPE staging
+                        prefix = f"vpe/dialogue/{media_item_id}"
+                        staged_frame_uri = await asyncio.to_thread(
+                            vpe_gcs.upload_file_to_gcs,
+                            local_path=str(local_norm_frame),
+                            destination_blob_name=f"{prefix}/frame.png",
+                            mime_type="image/png",
+                        )
+                        staged_audio_uri = await asyncio.to_thread(
+                            vpe_gcs.upload_file_to_gcs,
+                            local_path=str(local_norm_audio),
+                            destination_blob_name=f"{prefix}/audio_8s.wav",
+                            mime_type="audio/wav",
+                        )
+
+                        # 5. Build and submit VpeRequest
+                        storage_uri = f"gs://{cfg.VPE_BUCKET}/{prefix}/out"
+                        vpe_req = VpeRequest(
+                            capability_id=VpeCapabilityId.DIALOGUE_DRIVEN,
+                            storage_uri=storage_uri,
+                            prompt=request_dto.prompt,
+                            image=VpeMediaRef(
+                                gcs_uri=staged_frame_uri, mime_type="image/png"
+                            ),
+                            reference_audios=(
+                                VpeMediaRef(
+                                    gcs_uri=staged_audio_uri,
+                                    mime_type="audio/wav",
+                                ),
+                            ),
+                        )
+                        operation = await asyncio.to_thread(
+                            client.submit,
+                            build_payload(vpe_req),
+                        )
+                        worker_logger.info(
+                            "VPE dialogue operation submitted: %s",
+                            operation.name,
+                        )
+
+                        await media_repo.update(
+                            media_item_id,
+                            {"raw_data": {"operation": operation.name}},
+                        )
+
+                        # 6. Poll operation with retry on transient errors
+                        result = None
+                        max_poll_seconds = 1800
+                        poll_interval = 10
+                        poll_start = time.monotonic()
+
+                        while time.monotonic() - poll_start < max_poll_seconds:
+                            try:
+                                poll_res = await asyncio.to_thread(
+                                    client.poll, operation.name
+                                )
+                                if poll_res.has_error:
+                                    raise VpeJobError(
+                                        "Dialogue generation failed on Vertex AI: "
+                                        f"{poll_res.raw.get('error')}",
+                                    )
+                                if poll_res.done:
+                                    result = parse_result(poll_res)
+                                    break
+                            except Exception as poll_err:  # noqa: BLE001
+                                is_transient = (
+                                    "capacity" in str(poll_err).lower()
+                                    or "unavailable" in str(poll_err).lower()
+                                    or "429" in str(poll_err)
+                                    or "503" in str(poll_err)
+                                )
+                                if not is_transient:
+                                    raise
+                                worker_logger.warning(
+                                    "Transient poll error (%s), retrying in %ds...",
+                                    poll_err,
+                                    poll_interval,
+                                )
+                            await asyncio.sleep(poll_interval)
+
+                        if not result or not result.primary_video:
+                            raise VpeJobError(
+                                "Dialogue generation timed out or returned no primary video.",
+                            )
+
+                        # 7. Download generated video from VPE bucket
+                        local_gen_video = work / "generated_raw.mp4"
+                        fetched = await asyncio.to_thread(
+                            vpe_gcs.download_from_gcs,
+                            gcs_uri_path=_blob_path(
+                                result.primary_video.gcs_uri
+                            ),
+                            destination_file_path=str(local_gen_video),
+                        )
+                        if not fetched:
+                            raise VpeJobError(
+                                "Could not download generated video from "
+                                f"{result.primary_video.gcs_uri}",
+                            )
+
+                        # 8. Post-process (crop back to 9:16 if portrait)
+                        local_final_video = work / "final.mp4"
+                        await asyncio.to_thread(
+                            postprocess_dialogue_video,
+                            local_gen_video,
+                            local_final_video,
+                            is_portrait=is_portrait,
+                        )
+
+                        # 9. Upload final video + thumbnail to app bucket
+                        dest_video = (
+                            f"generated_videos/dialogue_{media_item_id}.mp4"
+                        )
+                        final_gcs_uri = await asyncio.to_thread(
+                            app_gcs.upload_file_to_gcs,
+                            local_path=str(local_final_video),
+                            destination_blob_name=dest_video,
+                            mime_type=_MP4,
+                        )
+
+                        thumb_path = await asyncio.to_thread(
+                            generate_thumbnail,
+                            str(local_final_video),
+                        )
+                        thumb_gcs_uri = None
+                        if thumb_path:
+                            thumb_gcs_uri = await asyncio.to_thread(
+                                app_gcs.upload_file_to_gcs,
+                                local_path=thumb_path,
+                                destination_blob_name=(
+                                    f"generated_videos/dialogue_{media_item_id}_thumb.png"
+                                ),
+                                mime_type="image/png",
+                            )
+
+                        measured_metadata = await asyncio.to_thread(
+                            build_measured_metadata,
+                            str(local_final_video),
+                        )
+
+                        # 10. Update row to COMPLETED
+                        await media_repo.update(
+                            media_item_id,
+                            {
+                                "status": JobStatusEnum.COMPLETED,
+                                "gcs_uris": [final_gcs_uri],
+                                "thumbnail_uris": (
+                                    [thumb_gcs_uri] if thumb_gcs_uri else []
+                                ),
+                                "generation_time": (
+                                    time.monotonic() - start_time
+                                ),
+                                "num_media": 1,
+                                **measured_metadata,
+                            },
+                        )
+                        worker_logger.info(
+                            "Dialogue generation completed for media item %s",
+                            media_item_id,
+                        )
+
+                    except Exception as error:  # noqa: BLE001
+                        worker_logger.error(
+                            "VPE dialogue failed: %s", error, exc_info=True
+                        )
+                        try:
+                            await db.rollback()
+                            await media_repo.update(
+                                media_item_id,
+                                {
+                                    "status": JobStatusEnum.FAILED,
+                                    "error_message": str(error),
+                                },
+                            )
+                        except Exception as update_error:  # noqa: BLE001
+                            worker_logger.error(
+                                "Could not record the failure on media item %s: %s",
+                                media_item_id,
+                                update_error,
+                                exc_info=True,
+                            )
+                    finally:
+                        if os.path.exists(temp_dir):
+                            shutil.rmtree(temp_dir)
+
+        loop.run_until_complete(_async_worker())
+        loop.close()
+
+    except Exception as error:  # noqa: BLE001
+        worker_logger.error(
+            "VPE dialogue worker failed to initialize: %s",
+            error,
+            exc_info=True,
+        )
 
 
 class VpeService:

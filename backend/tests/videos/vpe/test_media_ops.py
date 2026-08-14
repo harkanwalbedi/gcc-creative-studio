@@ -470,3 +470,152 @@ class TestRestoreAudio:
             video, short_audio_source, tmp_path / "final4.mp4"
         )
         assert _frame_count(restored) == 240
+
+
+class TestDialogueMediaOps:
+    """Tests for dialogue-specific media prep and post-processing."""
+
+    def test_prepare_dialogue_audio_normalizes_to_8s_48k(self, tmp_path: Path):
+        raw_audio = tmp_path / "raw.mp3"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=3",
+                str(raw_audio),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        from src.videos.vpe.media_ops import prepare_dialogue_audio
+
+        out_wav = tmp_path / "out_8s.wav"
+        prepare_dialogue_audio(raw_audio, out_wav)
+        assert out_wav.exists()
+
+        # Probe output
+        probe = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=sample_rate,duration",
+                "-of",
+                "json",
+                str(out_wav),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        data = json.loads(probe.stdout)["streams"][0]
+        assert data["sample_rate"] == "48000"
+        assert float(data["duration"]) == pytest.approx(8.0, abs=0.05)
+
+    def test_prepare_dialogue_frame_portrait_padding(self, tmp_path: Path):
+        portrait_img = tmp_path / "portrait.png"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=red:size=720x1280:duration=1",
+                "-frames:v",
+                "1",
+                str(portrait_img),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        from src.videos.vpe.media_ops import prepare_dialogue_frame
+
+        padded_img = tmp_path / "padded.png"
+        prepare_dialogue_frame(portrait_img, padded_img, is_portrait=True)
+        assert padded_img.exists()
+
+        probe = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "json",
+                str(padded_img),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        data = json.loads(probe.stdout)["streams"][0]
+        assert data["width"] == 1280
+        assert data["height"] == 720
+
+    def test_postprocess_dialogue_video_portrait_cropping(self, tmp_path: Path):
+        landscape_video = tmp_path / "gen_16x9.mp4"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-v",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=size=1280x720:rate=24:duration=2",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=2",
+                "-c:v",
+                "libx264",
+                "-c:a",
+                "aac",
+                str(landscape_video),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        from src.videos.vpe.media_ops import postprocess_dialogue_video
+
+        cropped_video = tmp_path / "cropped_9x16.mp4"
+        postprocess_dialogue_video(
+            landscape_video, cropped_video, is_portrait=True
+        )
+        assert cropped_video.exists()
+
+        probe = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "json",
+                str(cropped_video),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        data = json.loads(probe.stdout)["streams"][0]
+        assert data["width"] == 720
+        assert data["height"] == 1280

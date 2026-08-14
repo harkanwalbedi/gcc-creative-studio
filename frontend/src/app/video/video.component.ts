@@ -416,6 +416,7 @@ export class VideoComponent implements OnInit, AfterViewInit {
   selectModel(model: {value: string; viewValue: string}): void {
     this.searchRequest.generationModel = model.value;
     this.selectedGenerationModel = model.viewValue;
+    this.selectedModel.set(model.viewValue);
 
     this.clearOtherImage(1);
 
@@ -589,8 +590,12 @@ export class VideoComponent implements OnInit, AfterViewInit {
     if (this.modelSupportsMode(this.currentMode)) {
       return;
     }
-    this.onModeChanged('Text to Video');
-    this.selectedMode.set('Text to Video');
+    const supportedModes = this.getModelCapabilities().supportedModes;
+    const targetMode = supportedModes.length
+      ? supportedModes[0]
+      : 'Text to Video';
+    this.currentMode = targetMode;
+    this.selectedMode.set(targetMode);
   }
 
   selectAspectRatio(ratio: string | {value: string; viewValue: string}): void {
@@ -828,6 +833,28 @@ export class VideoComponent implements OnInit, AfterViewInit {
       );
       return;
     }
+
+    if (this.searchRequest.generationModel === 'veo-exp-a2v-generation') {
+      const hasImage =
+        this.referenceImages.length > 0 ||
+        this.startImageAssetId !== null ||
+        this.sourceMediaItems.some(i => !!i);
+      if (!hasImage) {
+        handleInfoSnackbar(
+          this._snackBar,
+          'Please select or upload a character reference image for dialogue lip sync.',
+        );
+        return;
+      }
+      if (!this.referenceAudio) {
+        handleInfoSnackbar(
+          this._snackBar,
+          'Please select or upload a reference audio track for dialogue lip sync.',
+        );
+        return;
+      }
+    }
+
     this.showErrorOverlay = true;
 
     const hasSourceAssets = this.startImageAssetId || this.endImageAssetId;
@@ -959,7 +986,9 @@ export class VideoComponent implements OnInit, AfterViewInit {
             }
           : undefined,
       referenceAudio:
-        this.currentMode === 'Ingredients to Video' && this.referenceAudio
+        (this.currentMode === 'Ingredients to Video' ||
+          this.currentMode === 'Frames to Video') &&
+        this.referenceAudio
           ? {
               id: this.referenceAudio.id,
               type: this.referenceAudio.type,
@@ -2100,30 +2129,37 @@ export class VideoComponent implements OnInit, AfterViewInit {
         );
       }
 
-      const omniModel = this.generationModels.find(
-        m => m.value === 'gemini-omni-flash-preview',
-      );
-      if (omniModel) {
-        if (this.searchRequest.generationModel !== omniModel.value) {
-          this.selectModel(omniModel);
-          handleSuccessSnackbar(
-            this._snackBar,
-            "We've switched to the Gemini Omni model for you, as this one supports reference images.",
-          );
-        }
-      } else {
-        const veo31Model = this.generationModels.find(
-          m => m.value === 'veo-3.1-generate-001',
+      const currentCapabilities = this.getModelCapabilities();
+      const currentSupportsReferences =
+        (currentCapabilities.maxReferenceImages ?? 0) > 0 ||
+        currentCapabilities.supportedModes.includes('Ingredients to Video');
+
+      if (!currentSupportsReferences) {
+        const omniModel = this.generationModels.find(
+          m => m.value === 'gemini-omni-flash-preview',
         );
-        if (
-          veo31Model &&
-          this.searchRequest.generationModel !== veo31Model.value
-        ) {
-          this.selectModel(veo31Model);
-          handleSuccessSnackbar(
-            this._snackBar,
-            "We've switched to the Veo 3.1 model for you, as this one supports reference images.",
+        if (omniModel) {
+          if (this.searchRequest.generationModel !== omniModel.value) {
+            this.selectModel(omniModel);
+            handleSuccessSnackbar(
+              this._snackBar,
+              "We've switched to the Gemini Omni model for you, as this one supports reference images.",
+            );
+          }
+        } else {
+          const veo31Model = this.generationModels.find(
+            m => m.value === 'veo-3.1-generate-001',
           );
+          if (
+            veo31Model &&
+            this.searchRequest.generationModel !== veo31Model.value
+          ) {
+            this.selectModel(veo31Model);
+            handleSuccessSnackbar(
+              this._snackBar,
+              "We've switched to the Veo 3.1 model for you, as this one supports reference images.",
+            );
+          }
         }
       }
     }

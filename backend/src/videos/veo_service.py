@@ -1926,12 +1926,27 @@ class VeoService:
         placeholder_item = await self.media_repo.create(placeholder_item)
 
         # 3. Submit background task
-        executor.submit(
-            _process_video_in_background,
-            media_item_id=placeholder_item.id,
-            request_dto=request_dto,
-            user_email=user.email,
-        )
+        if (
+            request_dto.generation_model
+            == GenerationModelEnum.VEO_EXP_A2V_GENERATION
+        ):
+            from src.videos.vpe_service import (  # pylint: disable=import-outside-toplevel
+                _process_vpe_dialogue_in_background,
+            )
+
+            executor.submit(
+                _process_vpe_dialogue_in_background,
+                media_item_id=placeholder_item.id,
+                request_dto=request_dto,
+                user_email=user.email,
+            )
+        else:
+            executor.submit(
+                _process_video_in_background,
+                media_item_id=placeholder_item.id,
+                request_dto=request_dto,
+                user_email=user.email,
+            )
 
         logger.info(
             "Video generation job successfully queued.",

@@ -1,5 +1,9 @@
 # Thumbnails Folder
 /thumbnails
+a2v_report/
+probe_fixtures/
+dialogue_test/
+dialogue_results/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

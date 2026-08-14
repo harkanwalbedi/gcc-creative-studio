@@ -441,3 +441,30 @@ class TestStartUpscaleJob:
         )
 
         assert placeholder.status == "processing"
+
+
+class TestProcessVpeDialogueInBackground:
+    """Tests for the dialogue background worker."""
+
+    def test_worker_fails_gracefully_when_unconfigured(self, monkeypatch):
+        from src.videos.dto.create_veo_dto import CreateVeoDto
+        from src.videos.vpe_service import _process_vpe_dialogue_in_background
+
+        monkeypatch.setattr(config_service, "VPE_ENABLED", False)
+
+        dto = CreateVeoDto(
+            prompt="Dialogue test",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.VEO_EXP_A2V_GENERATION,
+            start_image_asset_id={"id": 1, "type": "source_asset"},
+            reference_audio={"id": 2, "type": "source_asset"},
+            duration_seconds=8,
+            resolution="1K",
+        )
+
+        # Worker catches errors, logs, and handles DB updates
+        _process_vpe_dialogue_in_background(
+            media_item_id=999,
+            request_dto=dto,
+            user_email="test@example.com",
+        )

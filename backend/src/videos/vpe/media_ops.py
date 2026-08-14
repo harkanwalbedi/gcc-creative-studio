@@ -314,3 +314,107 @@ def restore_audio(
         str(target),
     )
     return Path(target)
+
+
+def prepare_dialogue_audio(
+    audio_source: Path | str,
+    target: Path | str,
+) -> Path:
+    """Normalizes an audio track to exactly 8.00s 48kHz stereo WAV.
+
+    Args:
+        audio_source: The source audio clip.
+        target: Where to write the normalized WAV file.
+
+    Returns:
+        The target Path.
+    """
+    _ffmpeg(
+        "-i",
+        str(audio_source),
+        "-t",
+        "8.00",
+        "-af",
+        "apad=whole_dur=8.00",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        str(target),
+    )
+    return Path(target)
+
+
+def prepare_dialogue_frame(
+    image_source: Path | str,
+    target: Path | str,
+    is_portrait: bool = False,
+) -> Path:
+    """Formats an input image into a 1280x720 frame for dialogue generation.
+
+    If the image is portrait (9:16), it is scaled to 405x720 and centered on
+    a 1280x720 black canvas so the model receives a standard landscape frame.
+
+    Args:
+        image_source: Path to source image.
+        target: Path to save the 1280x720 image.
+        is_portrait: True if the target output is 9:16 portrait.
+
+    Returns:
+        The target Path.
+    """
+    if is_portrait:
+        filter_str = "scale=405:720,pad=1280:720:(1280-405)/2:0:black"
+    else:
+        filter_str = (
+            "scale=1280:720:force_original_aspect_ratio=decrease,"
+            "pad=1280:720:(1280-iw)/2:(720-ih)/2:black"
+        )
+
+    _ffmpeg(
+        "-i",
+        str(image_source),
+        "-vf",
+        filter_str,
+        str(target),
+    )
+    return Path(target)
+
+
+def postprocess_dialogue_video(
+    video_source: Path | str,
+    target: Path | str,
+    is_portrait: bool = False,
+) -> Path:
+    """Postprocesses generated dialogue video.
+
+    If portrait mode was requested, crops the active center 405x720 region
+    and scales it to 720x1280 vertical video.
+
+    Args:
+        video_source: Path to the raw 1280x720 video from the model.
+        target: Path to save the final video.
+        is_portrait: True if portrait post-cropping is required.
+
+    Returns:
+        The target Path.
+    """
+    if is_portrait:
+        _ffmpeg(
+            "-i",
+            str(video_source),
+            "-vf",
+            "crop=405:720:(1280-405)/2:0,scale=720:1280",
+            "-c:a",
+            "copy",
+            str(target),
+        )
+    else:
+        _ffmpeg(
+            "-i",
+            str(video_source),
+            "-c",
+            "copy",
+            str(target),
+        )
+    return Path(target)

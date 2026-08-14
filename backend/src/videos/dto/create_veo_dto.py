@@ -262,6 +262,44 @@ class CreateVeoDto(BaseDto):
                 if item.role in reference_roles:
                     reference_roles_present = True
 
+        start_image_present = bool(self.start_image_asset_id)
+        end_image_present = bool(self.end_image_asset_id)
+        source_video_present = bool(self.source_video_asset_id)
+
+        if model == GenerationModelEnum.VEO_EXP_A2V_GENERATION:
+            if (
+                end_image_present
+                or source_video_present
+                or conflicting_roles_present
+                or self.edit_source
+                or self.reference_video
+            ):
+                raise ValueError(
+                    "Dialogue-driven model only supports an image input and an audio reference track.",
+                )
+            if not (
+                start_image_present
+                or start_frame_role_present
+                or self.reference_images
+                or reference_roles_present
+            ):
+                raise ValueError(
+                    "Dialogue-driven model requires a character image (reference image or start frame).",
+                )
+            if not self.reference_audio:
+                raise ValueError(
+                    "Dialogue-driven model requires a reference audio track.",
+                )
+            if self.duration_seconds != 8:
+                raise ValueError(
+                    f"Dialogue-driven model only supports an 8-second duration, got {self.duration_seconds}.",
+                )
+            if self.resolution != "1K":
+                raise ValueError(
+                    f"Dialogue-driven model only supports 1K resolution (720p), got '{self.resolution}'.",
+                )
+            return self
+
         has_asset_references = (
             bool(self.reference_images)
             or bool(self.reference_video)
@@ -285,10 +323,6 @@ class CreateVeoDto(BaseDto):
                     "Reference images/media are only supported by these "
                     f"models: {supported}.",
                 )
-
-            start_image_present = bool(self.start_image_asset_id)
-            end_image_present = bool(self.end_image_asset_id)
-            source_video_present = bool(self.source_video_asset_id)
 
             # Veo types its reference images separately from its `image=` input
             # and rejects both in one request ("Image and reference images
@@ -463,7 +497,7 @@ class CreateVeoDto(BaseDto):
         unsupported model interaction, so accepting it here only defers the
         failure to the background worker where the user sees a generic error.
         """
-        valid_video_ratios = [
+        valid_video_models = [
             GenerationModelEnum.GEMINI_OMNI_FLASH_PREVIEW,
             GenerationModelEnum.VEO_3_1_PREVIEW,
             GenerationModelEnum.VEO_3_1_GENERATE_001,
@@ -473,7 +507,8 @@ class CreateVeoDto(BaseDto):
             GenerationModelEnum.VEO_3_QUALITY,
             GenerationModelEnum.VEO_3_FAST_PREVIEW,
             GenerationModelEnum.VEO_3_QUALITY_PREVIEW,
+            GenerationModelEnum.VEO_EXP_A2V_GENERATION,
         ]
-        if value not in valid_video_ratios:
+        if value not in valid_video_models:
             raise ValueError("Invalid generation model for video.")
         return value
