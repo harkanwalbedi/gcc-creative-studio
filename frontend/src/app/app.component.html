@@ -21,6 +21,7 @@
 ></mat-progress-bar>
 <app-notification-container></app-notification-container>
 <app-header *ngIf="showHeader"></app-header>
+<app-studio-help-drawer *ngIf="showHeader"></app-studio-help-drawer>
 <div
   [ngClass]="showHeader ? 'content' : 'login'"
   [@routeAnimations]="outlet.isActivated ? outlet.activatedRoute : ''"

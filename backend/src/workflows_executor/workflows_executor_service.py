@@ -299,11 +299,17 @@ class WorkflowsExecutorService:
 
         url = self.backend_url + "/api/images/generate-images"
 
+        aspect_ratio = (
+            "1:1"
+            if request.config.aspect_ratio == "auto"
+            else request.config.aspect_ratio
+        )
+
         body = {
             "prompt": request.inputs.prompt,
             "workspace_id": request.workspace_id,
             "generation_model": request.config.model,
-            "aspect_ratio": request.config.aspect_ratio,
+            "aspect_ratio": aspect_ratio,
             "use_brand_guidelines": request.config.brand_guidelines,
             "number_of_media": 1,
             "resolution": request.config.resolution,
@@ -398,39 +404,95 @@ class WorkflowsExecutorService:
             request.inputs.input_images,
             default_role=AssetRoleEnum.IMAGE_REFERENCE_ASSET,
         )
+        for item in media_items:
+            if item.get("role") not in (
+                AssetRoleEnum.IMAGE_REFERENCE_ASSET.value,
+                AssetRoleEnum.IMAGE_REFERENCE_STYLE.value,
+            ):
+                item["role"] = AssetRoleEnum.IMAGE_REFERENCE_ASSET.value
 
-        reference_images = []
-        for aid in asset_ids:
-            reference_images.append(
-                {"asset_id": aid, "reference_type": "ASSET"}
-            )
+        reference_images = [
+            {"asset_id": aid, "reference_type": "ASSET"} for aid in asset_ids
+        ]
 
         # 2. Process Start Frame
         start_media, start_assets = self._normalize_asset_inputs(
             request.inputs.start_frame,
             default_role=AssetRoleEnum.START_FRAME,
         )
+        for item in start_media:
+            item["role"] = AssetRoleEnum.START_FRAME.value
         media_items.extend(start_media)
-        start_image_asset_id = start_assets[0] if start_assets else None
+        start_image_asset_id = (
+            {"id": start_assets[0], "type": "source_asset"}
+            if start_assets
+            else None
+        )
 
         # 3. Process End Frame
         end_media, end_assets = self._normalize_asset_inputs(
             request.inputs.end_frame,
             default_role=AssetRoleEnum.END_FRAME,
         )
+        for item in end_media:
+            item["role"] = AssetRoleEnum.END_FRAME.value
         media_items.extend(end_media)
-        end_image_asset_id = end_assets[0] if end_assets else None
+        end_image_asset_id = (
+            {"id": end_assets[0], "type": "source_asset"}
+            if end_assets
+            else None
+        )
+
+        # 4. Process Reference Videos (input_video)
+        video_ref_media, video_ref_assets = self._normalize_asset_inputs(
+            getattr(request.inputs, "input_video", None),
+            default_role=AssetRoleEnum.VIDEO_REFERENCE,
+        )
+        for item in video_ref_media:
+            item["role"] = AssetRoleEnum.VIDEO_REFERENCE.value
+        media_items.extend(video_ref_media)
+        reference_videos = [
+            {"id": aid, "type": "source_asset"} for aid in video_ref_assets
+        ]
+
+        # 5. Process Source Video for Extension (source_video)
+        source_vid_media, source_vid_assets = self._normalize_asset_inputs(
+            getattr(request.inputs, "source_video", None),
+            default_role=AssetRoleEnum.VIDEO_EXTENSION_SOURCE,
+        )
+        for item in source_vid_media:
+            item["role"] = AssetRoleEnum.VIDEO_EXTENSION_SOURCE.value
+        media_items.extend(source_vid_media)
+        source_video_asset_id = (
+            {"id": source_vid_assets[0], "type": "source_asset"}
+            if source_vid_assets
+            else None
+        )
+
+        aspect_ratio = getattr(request.config, "aspect_ratio", None)
+        if not isinstance(aspect_ratio, str) or aspect_ratio == "auto":
+            aspect_ratio = "16:9"
+
+        duration_seconds = getattr(request.config, "duration_seconds", None)
+        if not isinstance(duration_seconds, int) or isinstance(
+            duration_seconds, bool
+        ):
+            duration_seconds = 8
 
         body = {
             "prompt": request.inputs.prompt,
             "workspace_id": request.workspace_id,
             "generation_model": request.config.model,
+            "aspect_ratio": aspect_ratio,
+            "duration_seconds": duration_seconds,
             "resolution": request.config.resolution,
             "use_brand_guidelines": request.config.brand_guidelines,
-            "reference_images": reference_images,
-            "source_media_items": media_items,
+            "reference_images": reference_images or None,
+            "reference_videos": reference_videos or None,
+            "source_media_items": media_items or None,
             "start_image_asset_id": start_image_asset_id,
             "end_image_asset_id": end_image_asset_id,
+            "source_video_asset_id": source_video_asset_id,
             "number_of_media": 1,
         }
 

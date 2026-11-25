@@ -13,14 +13,15 @@
 # limitations under the License.
 """Media processing and utility functions."""
 
-
 import io
 import json
 import logging
 import os
 import pathlib
+import re
 import subprocess
 from fractions import Fraction
+from urllib.parse import parse_qs, urlparse
 
 from PIL import Image as PILImage
 
@@ -29,6 +30,68 @@ from google.api_core import exceptions
 from src.common.storage_service import GcsService
 
 logger = logging.getLogger(__name__)
+
+_YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
+
+def extract_youtube_video_id(url: str | None) -> str | None:
+    """Extracts the 11-character YouTube video ID from a URL if valid."""
+    if not url or not isinstance(url, str):
+        return None
+    raw = url.strip()
+    if not raw:
+        return None
+    try:
+        parsed = urlparse(raw)
+    except ValueError:
+        return None
+
+    if parsed.scheme not in ("http", "https"):
+        return None
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        return None
+
+    video_id: str | None = None
+    if hostname == "youtu.be" or hostname.endswith(".youtu.be"):
+        segments = [seg for seg in parsed.path.split("/") if seg]
+        if segments:
+            video_id = segments[0]
+    elif (
+        hostname == "youtube.com"
+        or hostname.endswith(".youtube.com")
+        or hostname == "youtube-nocookie.com"
+        or hostname.endswith(".youtube-nocookie.com")
+    ):
+        segments = [seg for seg in parsed.path.split("/") if seg]
+        if not segments or segments[0] == "watch":
+            qs = parse_qs(parsed.query)
+            v_vals = qs.get("v")
+            if v_vals:
+                video_id = v_vals[0]
+        elif (
+            segments[0] in ("shorts", "embed", "live", "v")
+            and len(segments) >= 2
+        ):
+            video_id = segments[1]
+
+    if video_id and _YOUTUBE_ID_RE.fullmatch(video_id):
+        return video_id
+    return None
+
+
+def get_youtube_aspect_ratio(url: str | None) -> str:
+    """Infers the aspect ratio ('9:16' for Shorts, else '16:9') from a YouTube URL."""
+    if not url or not isinstance(url, str):
+        return "16:9"
+    try:
+        parsed = urlparse(url.strip())
+    except ValueError:
+        return "16:9"
+    segments = [seg.lower() for seg in parsed.path.split("/") if seg]
+    if segments and segments[0] == "shorts":
+        return "9:16"
+    return "16:9"
 
 
 def generate_image_thumbnail_bytes(

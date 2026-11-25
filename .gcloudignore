@@ -20,7 +20,22 @@
 **/.env.local
 **/.env.development
 
+# Terraform caches, state, plans, and generated tfvars
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfvars
+**/*.tfvars.json
+**/tfplan
+*.cstudio_bootstrap.conf
+cstudio_profiles/
+
+# Local development & review artifacts
 notebooks
 experiments
-
 genmedia-agent-demos
+_review/
+downloads/
+screenshots/
+.gemini/
+.agents/

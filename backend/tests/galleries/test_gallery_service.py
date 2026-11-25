@@ -13,7 +13,6 @@
 # limitations under the License.
 """Tests for Gallery Service."""
 
-
 import io
 import zipfile
 from datetime import datetime
@@ -158,9 +157,7 @@ async def test_get_paginated_gallery_regular_user(service):
         roles=[UserRoleEnum.USER],
     )
 
-    search_dto = GallerySearchDto(
-        limit=10, offset=0, status=JobStatusEnum.FAILED
-    )
+    search_dto = GallerySearchDto(limit=10, offset=0, status=None)
 
     mock_query_result = MagicMock()
     mock_query_result.data = []
@@ -168,8 +165,8 @@ async def test_get_paginated_gallery_regular_user(service):
 
     await service.get_paginated_gallery(search_dto, current_user)
 
-    # Verify status is overwritten
-    assert search_dto.status == JobStatusEnum.COMPLETED
+    # Verify query was delegated to repository
+    service.mock_unified_gallery_repo.query.assert_called_once_with(search_dto)
 
 
 @pytest.mark.anyio
@@ -653,3 +650,146 @@ async def test_get_media_by_id_with_both_source_references(service):
     assert (
         result.enriched_source_assets[0].presigned_url == "https://signed.url"
     )
+
+
+@pytest.mark.anyio
+async def test_stream_gcs_media_full_and_range_requests(service):
+    payload = b"0123456789abcdefghij"
+
+    mock_blob = MagicMock()
+    mock_blob.exists.return_value = True
+    mock_blob.size = len(payload)
+    mock_blob.content_type = "video/mp4"
+    mock_blob.open.side_effect = lambda mode: io.BytesIO(payload)
+
+    mock_bucket = MagicMock()
+    mock_bucket.blob.return_value = mock_blob
+    service.gcs_service.client.bucket.return_value = mock_bucket
+
+    # 1. Full 200 OK stream
+    resp_full = await service.stream_gcs_media("gs://my-bucket/clips/demo.mp4")
+    assert resp_full.status_code == 200
+    assert resp_full.headers["Accept-Ranges"] == "bytes"
+    assert resp_full.headers["Content-Length"] == str(len(payload))
+    full_body = b"".join([chunk async for chunk in resp_full.body_iterator])
+    assert full_body == payload
+
+    # 2. Standard 206 Partial Content range (bytes=2-7)
+    resp_part = await service.stream_gcs_media(
+        "gs://my-bucket/clips/demo.mp4",
+        range_header="bytes=2-7",
+    )
+    assert resp_part.status_code == 206
+    assert resp_part.headers["Content-Range"] == f"bytes 2-7/{len(payload)}"
+    assert resp_part.headers["Content-Length"] == "6"
+    part_body = b"".join([chunk async for chunk in resp_part.body_iterator])
+    assert part_body == b"234567"
+
+    # 3. Suffix range (bytes=-4)
+    resp_suffix = await service.stream_gcs_media(
+        "gs://my-bucket/clips/demo.mp4",
+        range_header="bytes=-4",
+    )
+    assert resp_suffix.status_code == 206
+    suffix_body = b"".join([chunk async for chunk in resp_suffix.body_iterator])
+    assert suffix_body == b"ghij"
+
+    # 4. Invalid / unsatisfiable ranges -> 416
+    for bad_range in ["items=0-5", "bytes=50-60", "bytes=abc-def", "bytes=8-3"]:
+        with pytest.raises(HTTPException) as exc_info:
+            await service.stream_gcs_media(
+                "gs://my-bucket/clips/demo.mp4",
+                range_header=bad_range,
+            )
+        assert exc_info.value.status_code == 416
+
+    # 5. Invalid URI -> 400 and missing blob -> 404
+    with pytest.raises(HTTPException) as exc_bad:
+        await service.stream_gcs_media("https://not-gcs/file.mp4")
+    assert exc_bad.value.status_code == 400
+
+    mock_blob.exists.return_value = False
+    with pytest.raises(HTTPException) as exc_404:
+        await service.stream_gcs_media("gs://my-bucket/clips/missing.mp4")
+    assert exc_404.value.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_enrich_youtube_source_asset_and_unified_item(service):
+    yt_asset = MagicMock()
+    yt_asset.gcs_uri = None
+    yt_asset.external_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    yt_asset.thumbnail_gcs_uri = None
+    yt_asset.mime_type = "video/mp4"
+    service.mock_source_asset_repo.get_by_id.return_value = yt_asset
+
+    link_resp = await service._enrich_source_asset_link(
+        SourceAssetLink(asset_id=42, role=AssetRoleEnum.YOUTUBE_VIDEO_REFERENCE)
+    )
+    assert link_resp is not None
+    assert link_resp.gcs_uri is None
+    assert (
+        link_resp.external_url == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    )
+    assert (
+        link_resp.presigned_thumbnail_url
+        == "https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
+    )
+
+    unified = UnifiedGalleryItemResponse(
+        id=42,
+        workspace_id=1,
+        created_at=datetime.now(),
+        item_type="source_asset",
+        gcs_uris=[None],
+        thumbnail_uris=[],
+        metadata_={"external_url": "https://youtu.be/dQw4w9WgXcQ"},
+    )
+    enriched = await service._enrich_unified_item(unified)
+    assert enriched.gcs_uris == []
+    assert enriched.presigned_urls == ["https://youtu.be/dQw4w9WgXcQ"]
+    assert enriched.presigned_thumbnail_urls == [
+        "https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
+    ]
+
+
+@pytest.mark.anyio
+async def test_master_presigned_urls_populated_for_prores_and_dnxhr(service):
+    service.mock_iam_signer.generate_presigned_url.side_effect = (
+        lambda uri: f"https://signed.test/{uri}"
+    )
+    item = MediaItemModel(
+        id=77,
+        workspace_id=1,
+        user_email="pro@test.com",
+        mime_type=MimeTypeEnum.VIDEO_MP4,
+        model=GenerationModelEnum.OMNI_CINE,
+        aspect_ratio=AspectRatioEnum.RATIO_16_9,
+        status=JobStatusEnum.COMPLETED,
+        gcs_uris=["gs://bucket/preview.mp4"],
+        thumbnail_uris=["gs://bucket/thumb.png"],
+        raw_data={
+            "output_codec": "prores",
+            "compression_quality": "lossless",
+            "master_gcs_uris": ["gs://bucket/master.mov"],
+        },
+    )
+    resp = await service._create_gallery_response(item)
+    assert resp.master_presigned_urls == [
+        "https://signed.test/gs://bucket/master.mov"
+    ]
+
+    unified = UnifiedGalleryItemResponse(
+        id=77,
+        workspace_id=1,
+        created_at=datetime.now(),
+        item_type="media_item",
+        status="completed",
+        gcs_uris=["gs://bucket/preview.mp4"],
+        thumbnail_uris=[],
+        metadata_={"master_gcs_uris": ["gs://bucket/master.mxf"]},
+    )
+    enriched_u = await service._enrich_unified_item(unified)
+    assert enriched_u.master_presigned_urls == [
+        "https://signed.test/gs://bucket/master.mxf"
+    ]

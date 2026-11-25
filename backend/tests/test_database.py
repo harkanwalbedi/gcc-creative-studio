@@ -13,7 +13,6 @@
 # limitations under the License.
 """Tests for Database."""
 
-
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

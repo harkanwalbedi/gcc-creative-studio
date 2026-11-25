@@ -97,6 +97,7 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
   @Input() maxSelection: number | null = null;
   @Input() filterByUserEmail: string | null = null;
   @Input() showFiltersInSelector = false;
+  @Input() includeExternal = false;
   private isInitialized = false;
 
   @Input() set itemType(value: string) {
@@ -183,6 +184,13 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
     {value: 'audio/*', label: 'Audio'},
   ];
 
+  public statusOptions: DropdownOption[] = [
+    {value: JobStatus.COMPLETED, label: 'Completed'},
+    {value: JobStatus.PROCESSING, label: 'Running / Processing'},
+    {value: JobStatus.FAILED, label: 'Failed'},
+    {value: '', label: 'All Statuses'},
+  ];
+
   public get modelOptions(): DropdownOption[] {
     let filteredModels = MODEL_CONFIGS;
 
@@ -233,20 +241,19 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
     @Inject(PLATFORM_ID) platformId: Object,
   ) {
     this.isBrowser = isPlatformBrowser(platformId);
+    const iconPath = 'assets/images';
     this.matIconRegistry
       .addSvgIcon(
         'mobile-white-gemini-spark-icon',
-        this.setPath(`${this.path}/mobile-white-gemini-spark-icon.svg`),
+        this.setPath(`${iconPath}/mobile-white-gemini-spark-icon.svg`),
       )
       .addSvgIcon(
         'gemini-spark-icon',
-        this.setPath(`${this.path}/gemini-spark-icon.svg`),
+        this.setPath(`${iconPath}/gemini-spark-icon.svg`),
       );
     const user = this.userService.getUserDetails();
     this.userId = user?.id as number;
   }
-
-  private path = '../../assets/images';
 
   private setPath(url: string): SafeResourceUrl {
     return this.sanitizer.bypassSecurityTrustResourceUrl(url);
@@ -260,6 +267,7 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
     this.mediaTypeFilter = this.filterByType || '';
 
     if (!this.isSelectionMode && !this.isSelectorMode) {
+      this.includeExternal = true;
       const savedState = this.galleryService.filtersState;
       if (savedState) {
         this.queryFilter = savedState.query;
@@ -837,7 +845,10 @@ export class MediaGalleryComponent implements OnInit, OnDestroy, AfterViewInit {
     this.selectedItems.clear();
     this.tagsCurrentPage = 1; // Reset tags pagination on search
 
-    const filters: GallerySearchDto = {limit: 40};
+    const filters: GallerySearchDto = {
+      limit: 40,
+      includeExternal: this.includeExternal,
+    };
     if (this.queryFilter.trim()) {
       const term = this.queryFilter.trim();
       if (term.includes('@')) {

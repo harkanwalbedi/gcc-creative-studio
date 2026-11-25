@@ -94,15 +94,63 @@ class MediaTemplateService:
         if not asset_doc:
             return None
 
+        gcs_uri = (
+            asset_doc.gcs_uri
+            if isinstance(getattr(asset_doc, "gcs_uri", None), str)
+            else None
+        )
+        external_url = (
+            asset_doc.external_url
+            if isinstance(getattr(asset_doc, "external_url", None), str)
+            else None
+        )
+        thumbnail_gcs_uri = (
+            asset_doc.thumbnail_gcs_uri
+            if isinstance(getattr(asset_doc, "thumbnail_gcs_uri", None), str)
+            else None
+        )
+        raw_mime = getattr(asset_doc, "mime_type", None)
+        mime_type = (
+            str(raw_mime.value)
+            if hasattr(raw_mime, "value")
+            else (raw_mime if isinstance(raw_mime, str) else None)
+        )
+
+        if not gcs_uri:
+            from src.common.media_utils import extract_youtube_video_id
+
+            presigned_thumbnail_url = None
+            if thumbnail_gcs_uri:
+                presigned_thumbnail_url = await asyncio.to_thread(
+                    self.iam_signer_credentials.generate_presigned_url,
+                    thumbnail_gcs_uri,
+                )
+            elif external_url:
+                video_id = extract_youtube_video_id(external_url)
+                if video_id:
+                    presigned_thumbnail_url = (
+                        f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
+                    )
+            return SourceAssetLinkResponse(
+                **link.model_dump(),
+                presigned_url=external_url or "",
+                presigned_thumbnail_url=presigned_thumbnail_url,
+                gcs_uri=None,
+                mime_type=mime_type,
+                external_url=external_url,
+            )
+
         presigned_url = await asyncio.to_thread(
             self.iam_signer_credentials.generate_presigned_url,
-            asset_doc.gcs_uri,
+            gcs_uri,
         )
 
         return SourceAssetLinkResponse(
             **link.model_dump(),
             presigned_url=presigned_url,
-            gcs_uri=asset_doc.gcs_uri,
+            gcs_uri=gcs_uri,
+            mime_type=mime_type,
+            external_url=external_url,
         )
 
     async def _create_media_template_response(

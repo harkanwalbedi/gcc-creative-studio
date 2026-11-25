@@ -68,8 +68,10 @@ export interface MediaItem {
 
   // URI and URL fields
   gcsUris: string[];
+  masterGcsUris?: string[];
   presignedUrls?: string[];
   originalPresignedUrls?: string[];
+  masterPresignedUrls?: string[];
   presignedThumbnailUrls?: string[];
 
   // Video specific

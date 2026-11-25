@@ -20,13 +20,6 @@ import {
 } from '../../../../common/config/model-config';
 import {StepConfig} from '../generic-step/step.model';
 
-const model_options = MODEL_CONFIGS.filter(model => model.type === 'VIDEO').map(
-  model => ({
-    value: model.value,
-    label: model.viewValue,
-  }),
-);
-
 /**
  * Modes a workflow step can actually express.
  *
@@ -40,6 +33,19 @@ export const WORKFLOW_VIDEO_MODES: GenerationMode[] = [
   'Frames to Video',
   'Ingredients to Video',
 ];
+
+const model_options = MODEL_CONFIGS.filter(
+  model =>
+    model.type === 'VIDEO' &&
+    !model.capabilities.requiresVpe &&
+    !model.value.startsWith('veo-exp-') &&
+    model.capabilities.supportedModes.some(mode =>
+      WORKFLOW_VIDEO_MODES.includes(mode),
+    ),
+).map(model => ({
+  value: model.value,
+  label: model.viewValue,
+}));
 
 export const GENERATE_VIDEO_STEP_CONFIG: StepConfig = {
   type: 'generate-video',
@@ -57,6 +63,13 @@ export const GENERATE_VIDEO_STEP_CONFIG: StepConfig = {
       label: 'Input Images (Reference)',
       type: 'image',
       required: false,
+    },
+    {
+      name: 'input_video',
+      label: 'Video (Reference)',
+      type: 'video',
+      required: false,
+      hidden: true,
     },
     {
       name: 'start_frame',
@@ -79,7 +92,7 @@ export const GENERATE_VIDEO_STEP_CONFIG: StepConfig = {
       label: 'Model',
       type: 'select',
       options: model_options,
-      defaultValue: 'veo-3.0-generate-001',
+      defaultValue: 'gemini-omni-1.2-flash',
     },
     {
       name: 'input_mode',
@@ -94,6 +107,17 @@ export const GENERATE_VIDEO_STEP_CONFIG: StepConfig = {
       type: 'select',
       options: [],
       defaultValue: '16:9',
+    },
+    {
+      name: 'duration_seconds',
+      label: 'Duration',
+      type: 'select',
+      options: [
+        {value: 4, label: '4s'},
+        {value: 6, label: '6s'},
+        {value: 8, label: '8s'},
+      ],
+      defaultValue: 8,
     },
     {
       name: 'brand_guidelines',

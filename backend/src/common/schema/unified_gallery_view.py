@@ -56,12 +56,14 @@ class UnifiedGalleryView(Base):
     user_picture: Mapped[str | None] = mapped_column(String)
     user_email: Mapped[str | None] = mapped_column(String)
 
-    # Unified arrays for display
+    # Unified arrays for display (empty for external/YouTube source assets
+    # where gcs_uri is NULL).
     gcs_uris: Mapped[list[str]] = mapped_column(ARRAY(String))
     thumbnail_uris: Mapped[list[str]] = mapped_column(ARRAY(String))
     deleted_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True),
     )
 
-    # Metadata contains specific fields for each type
+    # Metadata contains specific fields for each type (including external_url
+    # for YouTube source assets and source_assets/source_media_items lineage).
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB)

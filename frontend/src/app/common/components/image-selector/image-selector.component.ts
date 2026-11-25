@@ -65,11 +65,12 @@ export class ImageSelectorComponent implements OnInit {
         | 'audio/*'
         | 'audio/mpeg'
         | null;
-      assetType: AssetTypeEnum;
+      assetType?: AssetTypeEnum;
       enableUpscale?: boolean;
       multiSelect?: boolean;
       showFooter?: boolean;
       maxSelection?: number;
+      includeExternal?: boolean;
     },
   ) {
     this.dialogRef.addPanelClass('image-selector-dialog');

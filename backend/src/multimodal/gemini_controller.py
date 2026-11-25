@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from src.auth.auth_guard import RoleChecker
@@ -20,6 +22,10 @@ from src.multimodal.dto.gemini_prompt_enhancer_dto import (
     RandomPromptRequestDto,
     RewritePromptRequestDto,
     RewrittenOrRandomPromptResponse,
+)
+from src.multimodal.dto.studio_assistant_dto import (
+    StudioAssistantRequestDto,
+    StudioAssistantResponseDto,
 )
 from src.multimodal.gemini_service import GeminiService
 from src.users.user_model import UserRoleEnum
@@ -64,7 +70,7 @@ async def rewrite_prompt_endpoint(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An unexpected error occurred during prompt rewriting: {e}",
-        )
+        ) from e
 
 
 @router.post(
@@ -88,4 +94,26 @@ async def random_prompt_endpoint(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate random prompt from Gemini: {e}",
+        ) from e
+
+
+@router.post(
+    "/assistant",
+    response_model=StudioAssistantResponseDto,
+    summary="Answer Creative Studio and GMP feature/configuration questions",
+)
+async def studio_assistant_endpoint(
+    assistant_request: StudioAssistantRequestDto,
+    gemini_service: GeminiService = Depends(),
+):
+    """Context-aware Q&A assistant grounded on Studio & GMP capabilities."""
+    try:
+        return await asyncio.to_thread(
+            gemini_service.answer_studio_question,
+            assistant_request,
         )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Studio Assistant could not answer right now: {e}",
+        ) from e

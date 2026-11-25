@@ -46,7 +46,7 @@
       />
     </ng-container>
 
-    <ng-container *ngIf="isVideo && selectedUrl">
+    <ng-container *ngIf="isVideo && !isYoutubeVideo && selectedUrl">
       <div class="video-wrapper" (click)="toggleVideoPlay()" style="width: 100%; height: 100%;">
         <video
           #videoPlayer
@@ -56,6 +56,18 @@
           controls
           muted
         ></video>
+      </div>
+    </ng-container>
+
+    <ng-container *ngIf="isVideo && isYoutubeVideo && selectedUrl">
+      <div class="video-wrapper" style="width: 100%; height: 100%;">
+        <iframe
+          class="w-full h-full"
+          [src]="selectedUrl | safeUrl:'youtube'"
+          frameborder="0"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          allowfullscreen
+        ></iframe>
       </div>
     </ng-container>
 
@@ -176,11 +188,28 @@
         shape="circle"
         size="medium"
         (click)="openInNewTab()"
-        matTooltip="Download"
+        [matTooltip]="isYoutubeVideo ? 'Watch in Youtube' : 'Download'"
         [disabled]="isDownloading"
       >
         <mat-spinner *ngIf="isDownloading" [diameter]="20"></mat-spinner>
-        <mat-icon *ngIf="!isDownloading">download</mat-icon>
+        @if (!isDownloading) {
+          @if (isYoutubeVideo) {
+            <mat-icon>visibility</mat-icon>
+          } @else {
+            <mat-icon>download</mat-icon>
+          }
+        }
+      </studio-button>
+
+      <studio-button
+        *ngIf="showDownloadButton && masterDownloadUrl"
+        variant="primary"
+        size="medium"
+        (click)="downloadMaster()"
+        [matTooltip]="'Download full mezzanine ' + masterFormatLabel + ' master'"
+      >
+        <mat-icon>high_quality</mat-icon>
+        Download {{ masterFormatLabel }}
       </studio-button>
 
       <studio-button
@@ -217,7 +246,7 @@
       </studio-button>
       
       <studio-button
-        *ngIf="isVideo && showOmniButton"
+        *ngIf="isVideo && !isYoutubeVideo && showOmniButton"
         variant="primary"
         size="medium"
         [disabled]="!hasStoredClip"
@@ -231,7 +260,7 @@
       </studio-button>
 
       <studio-button
-        *ngIf="isVideo && showExtendButton"
+        *ngIf="isVideo && !isYoutubeVideo && showExtendButton"
         variant="primary"
         size="medium"
         [disabled]="!hasStoredClip"
@@ -243,7 +272,7 @@
       </studio-button>
 
       <studio-button
-        *ngIf="isVideo && showConcatenateButton"
+        *ngIf="isVideo && !isYoutubeVideo && showConcatenateButton"
         variant="primary"
         size="medium"
         [disabled]="!hasStoredClip"
@@ -252,6 +281,18 @@
       >
         <mat-icon>add_to_photos</mat-icon>
         Concatenate
+      </studio-button>
+
+      <studio-button
+        *ngIf="isVideo && !isYoutubeVideo && showUpscaleButton"
+        variant="primary"
+        size="medium"
+        [disabled]="!hasStoredClip || !canUpscale"
+        (click)="onUpscaleClick()"
+        [matTooltip]="upscaleDisabledReason"
+      >
+        <mat-icon>hd</mat-icon>
+        Upscale
       </studio-button>
     </div>
 

@@ -64,7 +64,7 @@ export const GENERATE_AUDIO_STEP_CONFIG: StepConfig = {
       label: 'Model',
       type: 'select',
       options: model_options,
-      defaultValue: 'lyria-002',
+      defaultValue: 'lyria-3-clip-preview',
     },
     {
       name: 'voice_name',

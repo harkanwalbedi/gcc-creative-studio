@@ -76,7 +76,7 @@ export class FunTemplatesComponent implements OnInit, OnDestroy {
   ]);
 
   constructor() {
-    const iconPath = '../../assets/images';
+    const iconPath = 'assets/images';
     this.matIconRegistry
       .addSvgIcon(
         'gemini-spark-icon',

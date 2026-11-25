@@ -31,11 +31,17 @@ import {WorkflowEditorComponent} from './workflows/workflow-editor/workflow-edit
 import {WorkflowListComponent} from './workflows/workflow-list/workflow-list.component';
 import {WorkbenchComponent} from './workbench/workbench.component';
 import {UpscaleComponent} from './upscale/upscale.component';
+import {GmpStudioComponent} from './gmp-studio/gmp-studio.component';
 import {UserRolesEnum} from './common/models/user.model';
 
 const routes: Routes = [
   {path: 'login', component: LoginComponent},
   {path: '', component: HomeComponent, canActivate: [AuthGuardService]},
+  {
+    path: 'gmp',
+    component: GmpStudioComponent,
+    canActivate: [AuthGuardService],
+  },
   {
     path: 'fun-templates',
     component: FunTemplatesComponent,

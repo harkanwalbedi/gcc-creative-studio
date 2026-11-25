@@ -19,6 +19,7 @@ import {
   EventEmitter,
   Input,
   OnChanges,
+  OnDestroy,
   OnInit,
   Output,
   SimpleChanges,
@@ -26,18 +27,21 @@ import {
 import {FormBuilder, FormGroup, Validators} from '@angular/forms';
 import {Subscription} from 'rxjs';
 import {
+  ASPECT_RATIO_AUTO,
   ASPECT_RATIO_LABELS,
+  ASPECT_RATIO_SQUARE,
   MODEL_CONFIGS,
+  getSupportedModelDurations,
 } from '../../../../common/config/model-config';
 import {WORKFLOW_VIDEO_MODES} from '../step-configs/generate-video-step.config';
-import {StepConfig} from './step.model';
+import {StepConfig, StepInput} from './step.model';
 
 @Component({
   selector: 'app-generic-step',
   templateUrl: './generic-step.component.html',
   styleUrls: ['./generic-step.component.scss'],
 })
-export class GenericStepComponent implements OnInit, OnChanges {
+export class GenericStepComponent implements OnInit, OnChanges, OnDestroy {
   @Input() stepForm!: FormGroup;
   @Input() stepIndex!: number;
   @Input() availableOutputs: any[] = [];
@@ -50,12 +54,24 @@ export class GenericStepComponent implements OnInit, OnChanges {
   private settingsSubscription?: Subscription;
   private inputModeSubscription?: Subscription;
   currentMaxReferenceImages = 1;
+  currentMaxReferenceVideos = 0;
+  currentSupportsLastFrame = true;
 
   isCollapsed = true;
   inputModes: {[key: string]: 'fixed' | 'linked' | 'mixed'} = {};
   compatibleOutputs: {[key: string]: any[]} = {};
 
   constructor(private fb: FormBuilder) {}
+
+  getMaxMediaItems(input: StepInput): number {
+    if (input.name === 'start_frame' || input.name === 'end_frame') {
+      return 1;
+    }
+    if (input.name === 'input_video') {
+      return this.currentMaxReferenceVideos;
+    }
+    return this.currentMaxReferenceImages;
+  }
 
   ngOnInit(): void {
     this.initializeStepState();
@@ -155,6 +171,7 @@ export class GenericStepComponent implements OnInit, OnChanges {
           this.inputModeSubscription.unsubscribe();
         }
         this.inputModeSubscription = modeControl?.valueChanges.subscribe(() => {
+          this.updateDurationOptions();
           this.updateInputVisibility();
         });
       }
@@ -189,26 +206,33 @@ export class GenericStepComponent implements OnInit, OnChanges {
         s => s.name === 'aspect_ratio',
       );
       if (aspectRatioSetting) {
+        // Text-to-image ('generate-image') has no reference image, so exclude 'auto'.
+        const supportedRatios =
+          this.localConfig.type === 'generate-image'
+            ? modelMeta.supportedAspectRatios.filter(
+                ratio => ratio !== ASPECT_RATIO_AUTO,
+              )
+            : modelMeta.supportedAspectRatios;
+
         // Generate options dynamically using ASPECT_RATIO_LABELS
-        aspectRatioSetting.options = modelMeta.supportedAspectRatios.map(
-          ratio => ({
-            value: ratio,
-            label: ASPECT_RATIO_LABELS[ratio] || ratio,
-          }),
-        );
+        aspectRatioSetting.options = supportedRatios.map(ratio => ({
+          value: ratio,
+          label: ASPECT_RATIO_LABELS[ratio] || ratio,
+        }));
 
         // Reset value if current value is invalid
         const currentAspectRatio = this.stepForm.get(
           'settings.aspect_ratio',
         )?.value;
         if (
-          currentAspectRatio &&
-          !modelMeta.supportedAspectRatios.includes(currentAspectRatio)
+          !currentAspectRatio ||
+          !supportedRatios.includes(currentAspectRatio)
         ) {
-          // Set to first available option
-          const firstOption = aspectRatioSetting.options?.[0]?.value;
-          if (firstOption) {
-            this.stepForm.get('settings.aspect_ratio')?.setValue(firstOption);
+          const fallbackOption = supportedRatios.includes(ASPECT_RATIO_SQUARE)
+            ? ASPECT_RATIO_SQUARE
+            : aspectRatioSetting.options?.[0]?.value;
+          if (fallbackOption) {
+            this.stepForm.get('settings.aspect_ratio')?.setValue(fallbackOption);
           }
         }
       }
@@ -264,16 +288,70 @@ export class GenericStepComponent implements OnInit, OnChanges {
       }
     });
 
-    // 4. Update Inputs based on Mode and Max Refs
-    const maxRefs = modelMeta.maxReferenceImages; // 0, 1, or more
-    this.currentMaxReferenceImages = maxRefs;
+    // 4. Update Inputs & Durations based on Mode and Max Refs
+    this.currentMaxReferenceImages = modelMeta.maxReferenceImages;
+    this.currentMaxReferenceVideos =
+      modelMeta.maxReferenceVideos ??
+      (modelMeta.supportsVideoReference ? 3 : 0);
+    this.currentSupportsLastFrame = modelMeta.supportsLastFrame !== false;
 
+    this.updateDurationOptions();
     this.updateInputVisibility();
+  }
+
+  private updateDurationOptions(): void {
+    const durationSetting = this.localConfig.settings.find(
+      s => s.name === 'duration_seconds',
+    );
+    if (!durationSetting) return;
+
+    const modelValue = this.stepForm.get('settings.model')?.value;
+    const modelConfig = MODEL_CONFIGS.find(c => c.value === modelValue);
+    if (!modelConfig) return;
+
+    const currentMode = this.stepForm.get('settings.input_mode')?.value;
+    const currentResolution = this.stepForm.get('settings.resolution')?.value;
+    const hasEndFrame = !!this.stepForm.get('inputs.end_frame')?.value;
+    const hasReferences =
+      currentMode === 'Ingredients to Video' ||
+      !!this.stepForm.get('inputs.input_images')?.value?.length ||
+      !!this.stepForm.get('inputs.input_video')?.value?.length;
+    const durations = getSupportedModelDurations(
+      modelConfig,
+      currentMode,
+      currentResolution,
+      hasEndFrame,
+      hasReferences,
+    );
+
+    if (durations.length === 0) {
+      durationSetting.hidden = true;
+      return;
+    }
+
+    durationSetting.hidden = false;
+    durationSetting.options = durations.map(d => ({
+      value: d,
+      label: `${d}s`,
+    }));
+
+    const currentDuration = Number(
+      this.stepForm.get('settings.duration_seconds')?.value,
+    );
+    if (!durations.includes(currentDuration)) {
+      const fallbackDuration = durations.includes(8)
+        ? 8
+        : durations[durations.length - 1];
+      this.stepForm
+        .get('settings.duration_seconds')
+        ?.setValue(fallbackDuration);
+    }
   }
 
   private updateInputVisibility(): void {
     const currentMode = this.stepForm.get('settings.input_mode')?.value;
     const maxRefs = this.currentMaxReferenceImages;
+    const maxVideoRefs = this.currentMaxReferenceVideos;
 
     this.localConfig.inputs.forEach(input => {
       // Logic for specific inputs
@@ -294,8 +372,25 @@ export class GenericStepComponent implements OnInit, OnChanges {
           input.hidden = true;
           this.stepForm.get('inputs')?.get(input.name)?.disable();
         }
+      } else if (
+        this.localConfig.type === 'generate-video' &&
+        input.name === 'input_video'
+      ) {
+        const showVideoRefs =
+          currentMode === 'Ingredients to Video' && maxVideoRefs > 0;
+        if (showVideoRefs) {
+          input.hidden = false;
+          this.stepForm.get('inputs')?.get(input.name)?.enable();
+          this.inputModes[input.name] = 'mixed';
+        } else {
+          input.hidden = true;
+          this.stepForm.get('inputs')?.get(input.name)?.disable();
+        }
       } else if (input.name === 'start_frame' || input.name === 'end_frame') {
-        if (currentMode === 'Frames to Video') {
+        const allowFrame =
+          currentMode === 'Frames to Video' &&
+          (input.name === 'start_frame' || this.currentSupportsLastFrame);
+        if (allowFrame) {
           input.hidden = false;
           this.stepForm.get('inputs')?.get(input.name)?.enable();
           if (input.type === 'image' || input.type === 'video') {

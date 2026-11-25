@@ -50,10 +50,11 @@ Creative Studio goes beyond simple demos, implementing advanced, real-world feat
 - Create stunning images from detailed text descriptions.
 - Explore a wide range of creative styles, lighting, and composition controls.
 
-**✍️ Gemini-Powered Prompt Engineering:**
+**✍️ Gemini-Powered Prompt Engineering & Studio Guide:**
 
 - **Prompt Rewriting:** Automatically enhance and expand user prompts for superior generation results.
 - **Multimodal Critic:** Use Gemini's multimodal understanding to evaluate and provide feedback on generated images.
+- **GMP Features Hub (`/gmp`) & Contextual Help Assistant:** Explore Generative Media Pro (VPE) capabilities in a dedicated tab, inspect contextual tab/model configurations from the right-side **Help Me** drawer, and ask questions powered by **Gemini 3 Flash** (`POST /api/gemini/assistant`).
 
 **📄 Brand Guidelines Integration:**
 

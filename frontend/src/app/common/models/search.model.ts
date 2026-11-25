@@ -38,6 +38,8 @@ export type ImagenRequest = {
    */
   temperature?: number;
   resolution?: '1K' | '2K' | '4K';
+  referenceVideo?: AssetReferenceDto;
+  externalUrl?: string | null;
 };
 
 export type SourceMediaItemLink = {
@@ -62,6 +64,17 @@ export interface AssetReferenceDto {
   id: number;
   type: 'source_asset' | 'media_item';
   index?: number;
+}
+
+export interface ConditioningFrameDto {
+  frame_number: number;
+  image_asset_id: AssetReferenceDto;
+}
+
+export interface KeyframeSlot {
+  frameNumber: number;
+  previewUrl: string;
+  assetId: AssetReferenceDto;
 }
 
 export type VeoRequest = {
@@ -101,6 +114,23 @@ export type VeoRequest = {
    */
   stripSourceAudio?: boolean;
   resolution?: '1K' | '2K' | '4K' | '360p' | '720p' | '1080p';
+  videoTransformStrength?: number;
+  numDiffusionSteps?: number;
+  seed?: number;
+  videoTransformMaskAssetId?: AssetReferenceDto | null;
+  conditioningFrames?: ConditioningFrameDto[] | null;
+  outputCodec?: 'h264' | 'prores' | 'dnxhr';
+  compressionQuality?: 'optimized' | 'lossless';
+  audioControlMode?:
+    | 'generate'
+    | 'preserve_video_audio'
+    | 'target_audio'
+    | 'reference_audio'
+    | null;
+  isBlueMeshInput?: boolean;
+  seamlessLoop?: boolean;
+  tessellateHorizontal?: boolean;
+  tessellateVertical?: boolean;
 };
 
 export type SearchResponse = {
@@ -146,6 +176,7 @@ export interface GallerySearchDto {
   status?: string;
   workspaceId?: number;
   includeDeleted?: boolean;
+  includeExternal?: boolean;
   startDate?: string;
   endDate?: string;
   itemType?: string;
@@ -168,6 +199,7 @@ export interface ReferenceVideo {
   id: number;
   type: 'source_asset' | 'media_item';
   previewUrl: string;
+  videoUrl?: string;
   index?: number;
 }
 

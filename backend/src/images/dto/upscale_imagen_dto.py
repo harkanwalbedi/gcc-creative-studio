@@ -25,7 +25,7 @@ class UpscaleImagenDto(BaseDto):
     """
 
     generation_model: GenerationModelEnum = Field(
-        default=GenerationModelEnum.IMAGEN_4_UPSCALE_PREVIEW,
+        default=GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE,
         description="Model used for image generation.",
     )
     user_image: str = Field(
@@ -52,6 +52,8 @@ class UpscaleImagenDto(BaseDto):
     )
     image_preservation_factor: float | None = Field(
         default=None,
+        ge=0.0,
+        le=1.0,
         description="""With a higher image preservation factor, the original image
       pixels are more respected. With a lower image preservation factor, the
       output image will have be more different from the input image, but
@@ -59,21 +61,35 @@ class UpscaleImagenDto(BaseDto):
     )
 
     @field_validator("generation_model")
+    @classmethod
     def validate_imagen_generation_model(
         cls,
         value: GenerationModelEnum,
     ) -> GenerationModelEnum:
-        """Ensures that only supported generation models for imagen are used."""
-        valid_video_ratios = [
-            GenerationModelEnum.IMAGEN_4_UPSCALE_PREVIEW,
+        """Ensures that only supported generation models for imagen upscaling are used."""
+        valid_models = [
+            GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE,
         ]
-        if value not in valid_video_ratios:
+        if value not in valid_models:
             raise ValueError("Invalid generation model for imagen.")
         return value
 
+    @field_validator("image_preservation_factor")
+    @classmethod
+    def validate_preservation_factor(
+        cls,
+        value: float | None,
+    ) -> float | None:
+        if value is not None and not 0.0 <= value <= 1.0:
+            raise ValueError(
+                "image_preservation_factor must be between 0.0 and 1.0."
+            )
+        return value
+
     @field_validator("mime_type")
+    @classmethod
     def validate_imagen_mime_type(cls, value: MimeTypeEnum) -> MimeTypeEnum:
-        """Ensures that only supported generation models for imagen are used."""
+        """Ensures that only supported mime types for imagen are used."""
         valid_mime_types = [
             MimeTypeEnum.IMAGE_PNG,
             MimeTypeEnum.IMAGE_JPEG,

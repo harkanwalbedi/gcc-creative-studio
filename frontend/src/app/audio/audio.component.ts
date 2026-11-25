@@ -14,16 +14,13 @@
  * limitations under the License.
  */
 
-import {Component, ElementRef, Inject, ViewChild} from '@angular/core';
+import {Component, ElementRef, Inject, OnInit, ViewChild} from '@angular/core';
 import {
-  AudioService,
   CreateAudioDto,
   GenerationModelEnum,
 } from '../services/audio/audio.service';
 import {MatSnackBar} from '@angular/material/snack-bar';
 import {MatDialog} from '@angular/material/dialog';
-import {OnInit} from '@angular/core';
-import {finalize} from 'rxjs';
 import {DomSanitizer, SafeResourceUrl} from '@angular/platform-browser';
 import {WorkspaceStateService} from '../services/workspace/workspace-state.service';
 import {JobStatus, MediaItem} from '../common/models/media-item.model';
@@ -31,7 +28,15 @@ import {AddVoiceDialogComponent} from '../components/add-voice-dialog/add-voice-
 import {MatIconRegistry} from '@angular/material/icon';
 import {LanguageEnum, VoiceEnum} from './audio.constants';
 import {SearchService} from '../services/search/search.service';
-import {AudioStateService} from '../services/audio-state.service';
+import {
+  AudioStateService,
+  DEFAULT_GEMINI_TTS_MODEL,
+  DEFAULT_LYRIA_MODEL,
+} from '../services/audio-state.service';
+import {
+  GenerationModelConfig,
+  MODEL_CONFIGS,
+} from '../common/config/model-config';
 import {GalleryService} from '../gallery/gallery.service';
 import {Observable} from 'rxjs';
 import {
@@ -70,12 +75,22 @@ export class AudioComponent implements OnInit {
   showErrorOverlay = true;
 
   // Lyria Specific Inputs
+  /** Concrete Lyria model used when the "Lyria (Music)" family is selected. */
+  lyriaModel: string = DEFAULT_LYRIA_MODEL;
+  readonly lyriaModels: GenerationModelConfig[] = MODEL_CONFIGS.filter(
+    m => m.type === 'AUDIO' && m.value.startsWith('lyria'),
+  );
   prompt = '';
   negativePrompt = '';
   seed: number | undefined;
-  sampleCount = 4;
+  sampleCount = 1;
 
   // TTS & Chirp Specific Inputs
+  /** Concrete Gemini TTS model used when "Gemini TTS" is selected. */
+  geminiTtsModel: string = DEFAULT_GEMINI_TTS_MODEL;
+  readonly geminiTtsModels: GenerationModelConfig[] = MODEL_CONFIGS.filter(
+    m => m.type === 'AUDIO' && m.value.includes('-tts'),
+  );
   selectedLanguage: LanguageEnum = LanguageEnum.EN_US;
   selectedVoice: VoiceEnum | string = VoiceEnum.PUCK;
 
@@ -170,7 +185,7 @@ export class AudioComponent implements OnInit {
     {id: VoiceEnum.ZEPHYR, name: 'Zephyr (Female)', type: 'preset'},
     {id: VoiceEnum.ZUBENELGENUBI, name: 'Zubenelgenubi (Male)', type: 'preset'},
   ];
-  private path = '../../assets/images';
+  private path = 'assets/images';
 
   constructor(
     private searchService: SearchService,
@@ -198,6 +213,8 @@ export class AudioComponent implements OnInit {
   saveState() {
     this.audioStateService.updateState({
       model: this.selectedModel,
+      lyriaModel: this.lyriaModel,
+      geminiTtsModel: this.geminiTtsModel,
       prompt: this.prompt,
       negativePrompt: this.negativePrompt,
       seed: this.seed,
@@ -210,6 +227,8 @@ export class AudioComponent implements OnInit {
   private restoreState() {
     const state = this.audioStateService.getState();
     this.selectedModel = state.model as UiModelType;
+    this.lyriaModel = state.lyriaModel || DEFAULT_LYRIA_MODEL;
+    this.geminiTtsModel = state.geminiTtsModel || DEFAULT_GEMINI_TTS_MODEL;
     this.prompt = state.prompt;
     this.negativePrompt = state.negativePrompt;
     this.seed = state.seed;
@@ -220,6 +239,43 @@ export class AudioComponent implements OnInit {
 
   private setPath(url: string): SafeResourceUrl {
     return this.sanitizer.bypassSecurityTrustResourceUrl(url);
+  }
+
+  /** Capabilities of the currently selected Lyria model (from MODEL_CONFIGS). */
+  get selectedLyriaConfig(): GenerationModelConfig | undefined {
+    return this.lyriaModels.find(m => m.value === this.lyriaModel);
+  }
+
+  /** Lyria 3 (Interactions API) does not accept a seed; Lyria 2 does. */
+  get lyriaSupportsSeed(): boolean {
+    return this.selectedLyriaConfig?.capabilities?.supportsSeed ?? false;
+  }
+
+  /** Short, human-readable description of the selected Lyria model. */
+  get lyriaModelHint(): string {
+    switch (this.lyriaModel) {
+      case 'lyria-3-clip-preview':
+        return '30-second clips · fast';
+      case 'lyria-3-pro-preview':
+        return 'Full songs up to ~3 min · slower';
+      case 'lyria-002':
+        return '~33-second instrumental clips (legacy)';
+      default:
+        return '';
+    }
+  }
+
+  onLyriaModelChange(value: string) {
+    this.lyriaModel = value;
+    if (!this.lyriaSupportsSeed) {
+      this.seed = undefined;
+    }
+    this.saveState();
+  }
+
+  onGeminiTtsModelChange(value: string) {
+    this.geminiTtsModel = value;
+    this.saveState();
   }
 
   onVoiceSelectionChange(value: string) {
@@ -269,12 +325,11 @@ export class AudioComponent implements OnInit {
     let backendModel: GenerationModelEnum;
 
     if (this.selectedModel === 'lyria') {
-      backendModel = GenerationModelEnum.LYRIA_002;
+      backendModel = this.lyriaModel as GenerationModelEnum;
     } else if (this.selectedModel === 'chirp') {
       backendModel = GenerationModelEnum.CHIRP_3;
     } else {
-      // Default to Flash TTS for Gemini selection
-      backendModel = GenerationModelEnum.GEMINI_2_5_FLASH_TTS;
+      backendModel = this.geminiTtsModel as GenerationModelEnum;
     }
 
     // 2. Construct the generic DTO
@@ -285,7 +340,10 @@ export class AudioComponent implements OnInit {
       // Optional fields (backend ignores them if not relevant to the specific model)
       negativePrompt:
         this.selectedModel === 'lyria' ? this.negativePrompt : undefined,
-      seed: this.selectedModel === 'lyria' ? this.seed : undefined,
+      seed:
+        this.selectedModel === 'lyria' && this.lyriaSupportsSeed
+          ? this.seed
+          : undefined,
       sampleCount: this.sampleCount,
       languageCode:
         this.selectedModel !== 'lyria'

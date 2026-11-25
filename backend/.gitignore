@@ -3,8 +3,10 @@
 character_refs/
 omni_character_eval_report/
 omni_curated_showcase/
-scripts/
-vpe_smoke_out/
+a2v_report/
+probe_fixtures/
+dialogue_test/
+dialogue_results/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -141,3 +143,17 @@ cython_debug/
 # Logs
 */output
 *.info
+.host_venv/
+
+
+# Smoke-harness fixtures: ffmpeg regenerates these on every run, and a real
+# media run would put customer footage here. The request/response JSON beside
+# them is kept - that is the only record of what the live API actually did.
+vpe_smoke_out/fixtures/
+seam_report/*.mp4
+seam_report/segments/
+# Unlike seam_report, nothing here is a record of a live API call - it is
+# all local ffmpeg output verify_media_ops.py regenerates every run - so the
+# whole directory is disposable, report json included.
+media_ops_report/
+

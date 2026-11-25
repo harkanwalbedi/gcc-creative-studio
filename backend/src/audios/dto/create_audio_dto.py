@@ -72,15 +72,19 @@ class CreateAudioDto(BaseDto):
     )
 
     @field_validator("model")
+    @classmethod
     def validate_audio_model(
         cls, value: GenerationModelEnum
     ) -> GenerationModelEnum:
         allowed_audio_models = {
             GenerationModelEnum.LYRIA_002,
+            GenerationModelEnum.LYRIA_3_CLIP_PREVIEW,
+            GenerationModelEnum.LYRIA_3_PRO_PREVIEW,
             GenerationModelEnum.CHIRP_3,
             GenerationModelEnum.GEMINI_2_5_FLASH_TTS,
             GenerationModelEnum.GEMINI_2_5_FLASH_LITE_PREVIEW_TTS,
             GenerationModelEnum.GEMINI_2_5_PRO_TTS,
+            GenerationModelEnum.GEMINI_3_1_FLASH_TTS_PREVIEW,
         }
 
         if value not in allowed_audio_models:
@@ -92,9 +96,7 @@ class CreateAudioDto(BaseDto):
 
     @model_validator(mode="after")
     def validate_model_requirements(self) -> "CreateAudioDto":
-        model_str = str(self.model).lower()
-
-        is_music_model = "lyria" in model_str
+        is_music_model = "lyria" in str(self.model).lower()
 
         if not is_music_model:
             # TTS Check

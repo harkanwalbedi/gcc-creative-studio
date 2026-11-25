@@ -19,10 +19,9 @@ setup_logging()
 
 import logging
 
-logger = logging.getLogger(__name__)
-# Register SQLAlchemy event listeners
-from src.common import events  # noqa: F401
+from src.common import events  # noqa: F401 — registers ORM soft-delete filters
 
+logger = logging.getLogger(__name__)
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from os import getenv
@@ -55,6 +54,8 @@ from src.source_assets.source_asset_controller import (
 from src.tags.tags_controller import router as tags_router
 from src.users.user_controller import router as user_router
 from src.videos.veo_controller import router as video_router
+from src.videos.vpe_controller import config_router as vpe_config_router
+from src.videos.vpe_controller import router as vpe_router
 from src.workbench.router import router as workbench_router
 from src.workflows.workflow_controller import router as workflow_router
 from src.workflows_executor.workflows_executor_controller import (
@@ -125,12 +126,30 @@ async def lifespan(app: FastAPI):
     # Create the pool and attach it to the app's state
     app.state.executor = ThreadPoolExecutor(max_workers=4)
 
+    # VPE gets a pool of its own rather than sharing the one above, because
+    # its jobs are an order of magnitude longer than anything else queued
+    # there. A background worker holds its thread for the whole job - the
+    # polling loops sleep rather than yield the thread - and a measured VPE
+    # upscale takes around 315 seconds. Four of them would occupy every
+    # worker the application has, so a user upscaling a library would stall
+    # every unrelated generation and concatenation until it finished.
+    # A separate pool means VPE saturation only ever delays VPE.
+    app.state.vpe_executor = ThreadPoolExecutor(
+        max_workers=config_service.VPE_MAX_CONCURRENT_JOBS,
+        thread_name_prefix="vpe",
+    )
+
     yield
 
     logger.info("Application shutdown terminating")
 
     logger.info("Closing ThreadPoolExecutor...")
     app.state.executor.shutdown(wait=True)
+    # Waiting here would block shutdown for the length of a VPE job, which
+    # can be several minutes. The operation is long-running and server-side,
+    # so an interrupted worker loses the polling loop rather than the job;
+    # it stays recoverable from the operation name recorded on the row.
+    app.state.vpe_executor.shutdown(wait=False, cancel_futures=True)
     # Your shutdown logic here, e.g., closing database connections
 
 
@@ -177,6 +196,10 @@ app.include_router(admin_router)
 app.include_router(audio_router)
 app.include_router(video_router)
 app.include_router(gallery_stream_router)
+# Mounted unconditionally. vpe_config_router exposes deployment capability
+# discovery while vpe_router answers 503 when VPE is off.
+app.include_router(vpe_config_router)
+app.include_router(vpe_router)
 app.include_router(gallery_router)
 app.include_router(gemini_router)
 app.include_router(user_router)

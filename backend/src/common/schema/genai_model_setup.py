@@ -35,6 +35,7 @@ class GenAIModelSetup:
     """
 
     _clients: dict[str, Client] = {}
+    _global_clients: dict[str, Client] = {}
     _omni_clients: dict[str, Client] = {}
 
     @classmethod
@@ -51,7 +52,10 @@ class GenAIModelSetup:
         if target_project not in cls._clients:
             try:
                 logger.info(
-                    f"Initializing shared GenAI client for project '{target_project}' in location '{location}'",
+                    "Initializing shared GenAI client for project '%s' in "
+                    "location '%s'",
+                    target_project,
+                    location,
                 )
                 cls._clients[target_project] = Client(
                     project=target_project,
@@ -59,7 +63,11 @@ class GenAIModelSetup:
                     vertexai=config.INIT_VERTEX,
                     http_options={
                         "headers": {
-                            "user-agent": f"creative-studio/{VERSION} (+https://github.com/GoogleCloudPlatform/gcc-creative-studio)"
+                            "user-agent": (
+                                f"creative-studio/{VERSION} "
+                                "(+https://github.com/GoogleCloudPlatform/"
+                                "gcc-creative-studio)"
+                            )
                         }
                     },
                 )
@@ -67,6 +75,42 @@ class GenAIModelSetup:
                 logger.error("Failed to initialize GenAI client: %s", e)
                 raise
         return cls._clients[target_project]
+
+    @classmethod
+    def get_global_client(cls, project_id: str | None = None) -> Client:
+        """Initializes and returns a global-location GenAI client for Vertex AI.
+        Caches clients per project_id to reuse connection pools.
+        """
+        config = config_service
+        target_project = project_id or config.PROJECT_ID
+        if target_project is None:
+            raise ValueError("Project ID must be set.")
+
+        if target_project not in cls._global_clients:
+            try:
+                logger.info(
+                    "Initializing shared global GenAI client for project "
+                    "'%s' in location 'global'",
+                    target_project,
+                )
+                cls._global_clients[target_project] = Client(
+                    project=target_project,
+                    location="global",
+                    vertexai=config.INIT_VERTEX,
+                    http_options={
+                        "headers": {
+                            "user-agent": (
+                                f"creative-studio/{VERSION} "
+                                "(+https://github.com/GoogleCloudPlatform/"
+                                "gcc-creative-studio)"
+                            )
+                        }
+                    },
+                )
+            except Exception as e:
+                logger.error("Failed to initialize global GenAI client: %s", e)
+                raise
+        return cls._global_clients[target_project]
 
     @classmethod
     def get_omni_client(cls, project_id: str | None = None) -> Client:
@@ -81,7 +125,9 @@ class GenAIModelSetup:
         if target_project not in cls._omni_clients:
             try:
                 logger.info(
-                    f"Initializing shared Gemini Omni GenAI client for project '{target_project}' in location 'global'",
+                    "Initializing shared Gemini Omni GenAI client for project "
+                    "'%s' in location 'global'",
+                    target_project,
                 )
                 cls._omni_clients[target_project] = Client(
                     vertexai=True,
@@ -90,7 +136,11 @@ class GenAIModelSetup:
                     http_options={
                         "base_url": "https://aiplatform.googleapis.com",
                         "headers": {
-                            "user-agent": f"creative-studio/{VERSION} (+https://github.com/GoogleCloudPlatform/gcc-creative-studio)"
+                            "user-agent": (
+                                f"creative-studio/{VERSION} "
+                                "(+https://github.com/GoogleCloudPlatform/"
+                                "gcc-creative-studio)"
+                            )
                         },
                     },
                 )

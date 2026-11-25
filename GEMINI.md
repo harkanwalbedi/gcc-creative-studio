@@ -8,7 +8,8 @@ This document serves as a comprehensive guide for AI Agents and developers worki
 
 Creative Studio follows a **Modular, Feature-Driven Architecture** (inspired by Hexagonal Architecture).
 
-- **Structure:** Code is organized by feature domain (e.g., `/images`, `/users`) rather than technical layer.
+- **Structure:** Code is organized by feature domain (`/images` for Nano Banana & Imagen 4, `/videos` & `/videos/vpe` for Gemini Omni, Veo 3.1 & Veo Pro Experimental, `/audios` for Lyria 3, Chirp 3 & Gemini TTS, `/multimodal` for prompt rewriting & the Gemini 3 Flash Studio/GMP Q&A Assistant, `/galleries`, `/source_assets`, `/workflows`, `/workspaces`, plus the `/gmp` GMP Features Hub & contextual Help drawer on the frontend) rather than technical layer.
+- **Infrastructure (`infrastructure/` & `bootstrap.sh`):** Flattened V2 Terraform modules (`artifact`, `compute`, `database`, `network`) deploying Cloud Run with Direct VPC Egress to Private-IP Cloud SQL PostgreSQL, Firebase Hosting `/api/**` rewrites, and resumable `.cstudio` deployment profiles.
 - **Cohesion:** All code for a single feature is co-located (controllers, services, DTOs).
 - **Coupling:** Modules interact through well-defined interfaces.
 

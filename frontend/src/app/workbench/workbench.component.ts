@@ -207,79 +207,76 @@ export class WorkbenchComponent implements OnInit, OnDestroy {
     @Inject(PLATFORM_ID) platformId: Object,
   ) {
     this.isBrowser = isPlatformBrowser(platformId);
+    const iconPath = 'assets/images';
     this.matIconRegistry
       .addSvgIcon(
         'white-gemini-spark-icon',
-        this.setPath(`${this.path}/mobile-white-gemini-spark-icon.svg`),
+        this.setPath(`${iconPath}/mobile-white-gemini-spark-icon.svg`),
       )
       .addSvgIcon(
         'creative-studio-icon',
-        this.setPath(`${this.path}/creative-studio-icon.svg`),
+        this.setPath(`${iconPath}/creative-studio-icon.svg`),
       )
       .addSvgIcon(
         'mobile-white-gemini-spark-icon',
-        this.setPath(`${this.path}/mobile-white-gemini-spark-icon.svg`),
-      )
-      .addSvgIcon(
-        'creative-studio-icon',
-        this.setPath(`${this.path}/creative-studio-icon.svg`),
+        this.setPath(`${iconPath}/mobile-white-gemini-spark-icon.svg`),
       )
       .addSvgIcon(
         'fun-templates-icon',
-        this.setPath(`${this.path}/fun-templates-icon.svg`),
+        this.setPath(`${iconPath}/fun-templates-icon.svg`),
       )
       .addSvgIcon(
         'video-clap-icon',
-        this.setPath(`${this.path}/video-clap-icon.svg`),
+        this.setPath(`${iconPath}/video-clap-icon.svg`),
       )
       .addSvgIcon(
         'movie-shallow-icon',
-        this.setPath(`${this.path}/movie-clap-shallow-icon.svg`),
+        this.setPath(`${iconPath}/movie-clap-shallow-icon.svg`),
       )
       .addSvgIcon(
         'volume-off-icon',
-        this.setPath(`${this.path}/volume-off-icon.svg`),
+        this.setPath(`${iconPath}/volume-off-icon.svg`),
       )
-      .addSvgIcon('upload-icon', this.setPath(`${this.path}/upload-icon.svg`))
+      .addSvgIcon('upload-icon', this.setPath(`${iconPath}/upload-icon.svg`))
       .addSvgIcon(
         'sound-sensing-icon',
-        this.setPath(`${this.path}/sound-sensing-icon.svg`),
+        this.setPath(`${iconPath}/sound-sensing-icon.svg`),
       )
-      .addSvgIcon('lock-icon', this.setPath(`${this.path}/lock-icon.svg`))
-      .addSvgIcon('img-icon', this.setPath(`${this.path}/img-icon.svg`))
-      .addSvgIcon('eye-icon', this.setPath(`${this.path}/eye-icon.svg`))
-      .addSvgIcon('drive-icon', this.setPath(`${this.path}/drive-icon.svg`))
+      .addSvgIcon('lock-icon', this.setPath(`${iconPath}/lock-icon.svg`))
+      .addSvgIcon('img-icon', this.setPath(`${iconPath}/img-icon.svg`))
+      .addSvgIcon('eye-icon', this.setPath(`${iconPath}/eye-icon.svg`))
+      .addSvgIcon('drive-icon', this.setPath(`${iconPath}/drive-icon.svg`))
       .addSvgIcon(
         'audio-magic-eraser-icon',
-        this.setPath(`${this.path}/audio_magic_eraser-icon.svg`),
+        this.setPath(`${iconPath}/audio_magic_eraser-icon.svg`),
       )
       .addSvgIcon(
         'play-arrow-icon',
-        this.setPath(`${this.path}/play-arrow-icon.svg`),
+        this.setPath(`${iconPath}/play-arrow-icon.svg`),
       )
-      .addSvgIcon('square-icon', this.setPath(`${this.path}/square.svg`))
-      .addSvgIcon('phone-icon', this.setPath(`${this.path}/pixel-9.svg`))
+      .addSvgIcon('square-icon', this.setPath(`${iconPath}/square.svg`))
+      .addSvgIcon('phone-icon', this.setPath(`${iconPath}/pixel-9.svg`))
       .addSvgIcon(
         'lightbulb-icon',
-        this.setPath(`${this.path}/lightbulb-tips.svg`),
+        this.setPath(`${iconPath}/lightbulb-tips.svg`),
       )
-      .addSvgIcon('desktop-icon', this.setPath(`${this.path}/desktop.svg`))
+      .addSvgIcon('desktop-icon', this.setPath(`${iconPath}/desktop.svg`))
       .addSvgIcon(
         'desktop-mac-icon',
-        this.setPath(`${this.path}/desktop-mac.svg`),
+        this.setPath(`${iconPath}/desktop-mac.svg`),
       )
-      .addSvgIcon('edit-icon', this.setPath(`${this.path}/edit.svg`))
+      .addSvgIcon('edit-icon', this.setPath(`${iconPath}/edit.svg`))
       .addSvgIcon(
         'gemini-spark-icon',
-        this.setPath(`${this.path}/gemini-spark.svg`),
+        this.setPath(`${iconPath}/gemini-spark.svg`),
       )
       .addSvgIcon(
         'photo-merge-auto-icon',
-        this.setPath(`${this.path}/photo-merge-auto.svg`),
+        this.setPath(`${iconPath}/photo-merge-auto.svg`),
       )
       .addSvgIcon(
         'web-stories-icon',
-        this.setPath(`${this.path}/web-stories.svg`),
+        this.setPath(`${iconPath}/web-stories.svg`),
       );
 
     // Setup an effect to handle video seeking/sync when active clip changes or time jumps
@@ -333,8 +330,6 @@ export class WorkbenchComponent implements OnInit, OnDestroy {
       }
     });
   }
-
-  private path = '../../../assets/images';
 
   private setPath(url: string): SafeResourceUrl {
     return this.sanitizer.bypassSecurityTrustResourceUrl(url);

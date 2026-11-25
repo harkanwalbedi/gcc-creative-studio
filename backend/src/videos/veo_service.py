@@ -62,6 +62,7 @@ from src.videos.dto.concatenate_videos_dto import ConcatenateVideosDto
 from src.videos.dto.create_veo_dto import (
     OMNI_1_0_MODELS,
     OMNI_1_1_MODELS,
+    OMNI_1_1_PLUS_MODELS,
     OMNI_MODELS,
     CreateVeoDto,
 )
@@ -536,8 +537,14 @@ def _process_video_in_background(
                                 request_dto.workspace_id
                             )
                             if ws:
-                                target_project_id = ws.gcp_project_id
-                                target_bucket_name = ws.gcs_bucket_name
+                                if isinstance(
+                                    getattr(ws, "gcp_project_id", None), str
+                                ):
+                                    target_project_id = ws.gcp_project_id
+                                if isinstance(
+                                    getattr(ws, "gcs_bucket_name", None), str
+                                ):
+                                    target_bucket_name = ws.gcs_bucket_name
                         except Exception as e:
                             worker_logger.warning(
                                 "Could not fetch workspace config: %s", e
@@ -549,10 +556,6 @@ def _process_video_in_background(
                     )
 
                     try:
-                        # The row's created_at is when the job was queued, and
-                        # under a busy executor that can be long before a
-                        # thread picks it up. Stamping it here records when the
-                        # work actually started.
                         await record_worker_progress(
                             media_repo,
                             media_item_id,
@@ -575,7 +578,6 @@ def _process_video_in_background(
                                     target_type=PromptTargetEnum.VIDEO,
                                 )
                             )
-                            # Update the prompt in the DTO for logging and future reference
                             request_dto.prompt = rewritten_prompt
                         else:
                             rewritten_prompt = request_dto.prompt
@@ -585,12 +587,12 @@ def _process_video_in_background(
                         end_image_for_api: types.Image | None = None
                         reference_images_for_api: list[
                             types.VideoGenerationReferenceImage
-                        ] = []  # 1. Create a list for reference images
+                        ] = []
+                        source_media_ref_videos: list[tuple[str, str]] = []
 
                         # --- Handle Video Extension ---
                         source_video_for_api: types.Video | None = None
 
-                        # --- Handle Generated Inputs for Source Assets (start/end frames, source video, and references) ---
                         if request_dto.source_video_asset_id:
                             ref = request_dto.source_video_asset_id
                             if ref.type == "media_item":
@@ -665,7 +667,6 @@ def _process_video_in_background(
                                         mime_type=asset.mime_type,
                                     )
 
-                                    # Map our DTO enum to the Google SDK's enum
                                     sdk_ref_type = None
                                     if (
                                         ref_dto.reference_type
@@ -690,7 +691,6 @@ def _process_video_in_background(
                                             ),
                                         )
 
-                        # --- Handle Generated Inputs for Media Items (start/end frames, source video, and references) ---
                         if request_dto.source_media_items:
                             for gen_input in request_dto.source_media_items:
                                 parent_item = await media_repo.get_by_id(
@@ -733,10 +733,6 @@ def _process_video_in_background(
                                         gen_input.role
                                         == AssetRoleEnum.IMAGE_REFERENCE_ASSET
                                     ):
-                                        image_for_api = types.Image(
-                                            gcs_uri=gcs_uri,
-                                            mime_type=parent_item.mime_type,
-                                        )
                                         reference_images_for_api.append(
                                             types.VideoGenerationReferenceImage(
                                                 image=image_for_api,
@@ -747,31 +743,28 @@ def _process_video_in_background(
                                         gen_input.role
                                         == AssetRoleEnum.IMAGE_REFERENCE_STYLE
                                     ):
-                                        image_for_api = types.Image(
-                                            gcs_uri=gcs_uri,
-                                            mime_type=parent_item.mime_type,
-                                        )
                                         reference_images_for_api.append(
                                             types.VideoGenerationReferenceImage(
                                                 image=image_for_api,
                                                 reference_type=types.VideoGenerationReferenceType.STYLE,
                                             ),
                                         )
+                                    elif (
+                                        gen_input.role
+                                        == AssetRoleEnum.VIDEO_REFERENCE
+                                    ):
+                                        source_media_ref_videos.append(
+                                            (
+                                                gcs_uri,
+                                                parent_item.mime_type
+                                                or MimeTypeEnum.VIDEO_MP4.value,
+                                            )
+                                        )
                                 else:
                                     worker_logger.warning(
                                         f"Could not find or use generated_input: {gen_input.media_item_id} at index {gen_input.media_index}",
                                     )
 
-                        # Validation to prevent conflicting inputs.
-                        #
-                        # Veo types its reference images separately from its
-                        # `image=` input and rejects both in one request. Omni
-                        # has no typed reference field - every image rides the
-                        # multimodal input - so an opening frame alongside
-                        # character sheets is valid there, and is how a shot is
-                        # anchored while identities are held. An end frame or an
-                        # extension source stays disallowed for Omni too, since
-                        # it can neither interpolate nor extend.
                         is_omni_request = (
                             request_dto.generation_model in OMNI_MODELS
                         )
@@ -805,10 +798,6 @@ def _process_video_in_background(
                             interaction_id = None
                             thought_signature = None
 
-                            # Resolve reference video URIs and their mime types.
-                            # Audio references are rejected upstream by
-                            # CreateVeoDto: Omni accepts an audio part and then
-                            # ignores it, so there is nothing to resolve here.
                             all_ref_videos = []
                             if request_dto.reference_videos:
                                 all_ref_videos.extend(
@@ -819,7 +808,9 @@ def _process_video_in_background(
                                     request_dto.reference_video
                                 )
 
-                            ref_videos_for_api: list[tuple[str, str]] = []
+                            ref_videos_for_api: list[tuple[str, str]] = list(
+                                source_media_ref_videos
+                            )
                             for ref in all_ref_videos:
                                 if ref.type == "media_item":
                                     parent_item = await media_repo.get_by_id(
@@ -1112,7 +1103,7 @@ def _process_video_in_background(
                             req_resolution = (
                                 request_dto.resolution
                                 if request_dto.generation_model
-                                in OMNI_1_1_MODELS
+                                in OMNI_1_1_PLUS_MODELS
                                 else None
                             )
                             omni_response_format = build_omni_response_format(
@@ -1495,7 +1486,9 @@ def _process_video_in_background(
                                     generated_video.video
                                     and generated_video.video.uri
                                 ):
-                                    output_path = f"{generated_video.video.uri.replace(f'gs://{cfg.GENMEDIA_BUCKET}/', '')}"
+                                    output_path = gcs_uri_to_blob_path(
+                                        generated_video.video.uri
+                                    )
 
                                     # Step 1: Download the Video from GCS
                                     local_output_path = (
@@ -1700,7 +1693,6 @@ def _process_video_concatenation_in_background(
                     media_repo = MediaRepository(db)
                     source_asset_repo = SourceAssetRepository(db)
                     workspace_repo = WorkspaceRepository(db)
-                    cfg = config_service
 
                     target_project_id: str | None = None
                     target_bucket_name: str | None = None
@@ -1710,8 +1702,14 @@ def _process_video_concatenation_in_background(
                                 request_dto.workspace_id
                             )
                             if ws:
-                                target_project_id = ws.gcp_project_id
-                                target_bucket_name = ws.gcs_bucket_name
+                                if isinstance(
+                                    getattr(ws, "gcp_project_id", None), str
+                                ):
+                                    target_project_id = ws.gcp_project_id
+                                if isinstance(
+                                    getattr(ws, "gcs_bucket_name", None), str
+                                ):
+                                    target_bucket_name = ws.gcs_bucket_name
                         except Exception as e:
                             worker_logger.warning(
                                 "Could not fetch workspace config: %s", e
@@ -1768,10 +1766,7 @@ def _process_video_concatenation_in_background(
 
                             local_path = await asyncio.to_thread(
                                 gcs_service.download_from_gcs,
-                                gcs_uri_path=gcs_uri.replace(
-                                    f"gs://{cfg.GENMEDIA_BUCKET}/",
-                                    "",
-                                ),
+                                gcs_uri_path=gcs_uri_to_blob_path(gcs_uri),
                                 destination_file_path=f"{temp_dir}/{video_input.id}.mp4",
                             )
                             if not local_path:
@@ -1911,6 +1906,27 @@ class VeoService:
             The initial MediaItem with a 'processing' status and a pre-generated ID.
 
         """
+        vpe_models = (
+            GenerationModelEnum.VEO_EXP_A2V_GENERATION,
+            GenerationModelEnum.VEO_EXP_VIDEO_TRANSFORM,
+            GenerationModelEnum.VEO_EXP_PERF_ESTIMATION,
+            GenerationModelEnum.OMNI_PERF,
+            GenerationModelEnum.OMNI_CINE,
+            GenerationModelEnum.VEO_EXP_VIDEO_TEXTURES,
+        )
+        if request_dto.generation_model in vpe_models:
+            from src.videos.vpe_service import (  # pylint: disable=import-outside-toplevel
+                VpeJobError,
+                require_vpe_configured,
+            )
+
+            try:
+                require_vpe_configured(config_service)
+            except VpeJobError as error:
+                raise HTTPException(
+                    status_code=503, detail=str(error)
+                ) from error
+
         # 1. Prepare source asset links if they exist
         source_assets: list[SourceAssetLink] = []
         source_media_items: list[SourceMediaItemLink] = []
@@ -2071,12 +2087,49 @@ class VeoService:
         placeholder_item = await self.media_repo.create(placeholder_item)
 
         # 3. Submit background task
-        executor.submit(
-            _process_video_in_background,
-            media_item_id=placeholder_item.id,
-            request_dto=request_dto,
-            user_email=user.email,
-        )
+        if request_dto.generation_model in vpe_models:
+            from src.videos.vpe_service import (  # pylint: disable=import-outside-toplevel
+                _process_vpe_dialogue_in_background,
+                _process_vpe_omni_cine_in_background,
+                _process_vpe_omni_perf_in_background,
+                _process_vpe_perf_estimation_in_background,
+                _process_vpe_transform_in_background,
+                _process_vpe_video_textures_in_background,
+            )
+
+            vpe_dispatch = {
+                GenerationModelEnum.VEO_EXP_A2V_GENERATION: (
+                    _process_vpe_dialogue_in_background
+                ),
+                GenerationModelEnum.VEO_EXP_VIDEO_TRANSFORM: (
+                    _process_vpe_transform_in_background
+                ),
+                GenerationModelEnum.VEO_EXP_PERF_ESTIMATION: (
+                    _process_vpe_perf_estimation_in_background
+                ),
+                GenerationModelEnum.OMNI_PERF: (
+                    _process_vpe_omni_perf_in_background
+                ),
+                GenerationModelEnum.OMNI_CINE: (
+                    _process_vpe_omni_cine_in_background
+                ),
+                GenerationModelEnum.VEO_EXP_VIDEO_TEXTURES: (
+                    _process_vpe_video_textures_in_background
+                ),
+            }
+            executor.submit(
+                vpe_dispatch[request_dto.generation_model],
+                media_item_id=placeholder_item.id,
+                request_dto=request_dto,
+                user_email=user.email,
+            )
+        else:
+            executor.submit(
+                _process_video_in_background,
+                media_item_id=placeholder_item.id,
+                request_dto=request_dto,
+                user_email=user.email,
+            )
 
         logger.info(
             "Video generation job successfully queued.",

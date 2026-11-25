@@ -335,3 +335,71 @@ async def test_generate_audio(service):
         assert result["generated_audio"] == 555
         service.mock_rest_client.post.assert_called_once()
         mock_poll.assert_called_once_with(555, None)
+
+
+@pytest.mark.anyio
+async def test_generate_image_auto_aspect_ratio_fallback(service):
+    request = MagicMock()
+    request.workspace_id = 1
+    request.inputs.prompt = "A dynamic landscape"
+    request.config.model = "gemini-3.1-flash-image"
+    request.config.aspect_ratio = "auto"
+    request.config.brand_guidelines = False
+
+    service.mock_rest_client.post.return_value = Response(200, json={"id": 901})
+
+    with patch.object(
+        service,
+        "_poll_job_status",
+        AsyncMock(return_value=True),
+    ):
+        result = await service.generate_image(request)
+        assert result["generated_image"] == 901
+        _, kwargs = service.mock_rest_client.post.call_args
+        assert kwargs["json"]["aspect_ratio"] == "1:1"
+
+
+@pytest.mark.anyio
+async def test_generate_video_forwards_duration_and_video_inputs(service):
+    from src.workflows.schema.workflow_model import ReferenceMediaOrAsset
+
+    request = MagicMock()
+    request.workspace_id = 1
+    request.inputs.prompt = "Extend scene"
+    request.inputs.input_images = None
+    request.inputs.start_frame = None
+    request.inputs.end_frame = None
+    request.inputs.input_video = [
+        ReferenceMediaOrAsset(previewUrl="", sourceAssetId=321),
+        322,
+    ]
+    request.inputs.source_video = ReferenceMediaOrAsset(
+        previewUrl="", sourceAssetId=654
+    )
+    request.config.model = "gemini-omni-1.2-flash"
+    request.config.duration_seconds = 10
+    request.config.resolution = "1080p"
+    request.config.brand_guidelines = False
+
+    service.mock_rest_client.post.return_value = Response(200, json={"id": 902})
+
+    with patch.object(
+        service,
+        "_poll_job_status",
+        AsyncMock(return_value=True),
+    ):
+        result = await service.generate_video(request)
+        assert result["generated_video"] == 902
+        _, kwargs = service.mock_rest_client.post.call_args
+        payload = kwargs["json"]
+        assert payload["duration_seconds"] == 10
+        assert payload["reference_videos"] == [
+            {"id": 321, "type": "source_asset"}
+        ]
+        assert payload["source_video_asset_id"] == {
+            "id": 654,
+            "type": "source_asset",
+        }
+        assert payload["source_media_items"] == [
+            {"media_item_id": 322, "media_index": 0, "role": "video_reference"}
+        ]

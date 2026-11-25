@@ -548,3 +548,309 @@ def test_edit_source_rejects_a_start_frame():
             start_image_asset_id={"id": 9, "type": "source_asset"},
         )
     assert "start frame" in str(exc_info.value)
+
+
+def test_dialogue_model_valid():
+    dto = CreateVeoDto(
+        prompt="Character speaking in tavern",
+        workspace_id=1,
+        generation_model=GenerationModelEnum.VEO_EXP_A2V_GENERATION,
+        start_image_asset_id={"id": 1, "type": "source_asset"},
+        reference_audio={"id": 2, "type": "source_asset"},
+        duration_seconds=8,
+        resolution="1K",
+    )
+    assert dto.generation_model == GenerationModelEnum.VEO_EXP_A2V_GENERATION
+    assert dto.duration_seconds == 8
+    assert dto.resolution == "1K"
+
+
+def test_dialogue_model_missing_audio():
+    with pytest.raises(ValidationError) as exc_info:
+        CreateVeoDto(
+            prompt="Character speaking in tavern",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.VEO_EXP_A2V_GENERATION,
+            start_image_asset_id={"id": 1, "type": "source_asset"},
+            duration_seconds=8,
+            resolution="1K",
+        )
+    assert "requires a reference audio track" in str(exc_info.value)
+
+
+def test_dialogue_model_missing_image():
+    with pytest.raises(ValidationError) as exc_info:
+        CreateVeoDto(
+            prompt="Character speaking in tavern",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.VEO_EXP_A2V_GENERATION,
+            reference_audio={"id": 2, "type": "source_asset"},
+            duration_seconds=8,
+            resolution="1K",
+        )
+    assert "requires a character image" in str(exc_info.value)
+
+
+def test_dialogue_model_invalid_duration():
+    with pytest.raises(ValidationError) as exc_info:
+        CreateVeoDto(
+            prompt="Character speaking in tavern",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.VEO_EXP_A2V_GENERATION,
+            start_image_asset_id={"id": 1, "type": "source_asset"},
+            reference_audio={"id": 2, "type": "source_asset"},
+            duration_seconds=6,
+            resolution="1K",
+        )
+    assert "8-second duration" in str(exc_info.value)
+
+
+def test_dialogue_model_invalid_resolution():
+    with pytest.raises(ValidationError) as exc_info:
+        CreateVeoDto(
+            prompt="Character speaking in tavern",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.VEO_EXP_A2V_GENERATION,
+            start_image_asset_id={"id": 1, "type": "source_asset"},
+            reference_audio={"id": 2, "type": "source_asset"},
+            duration_seconds=8,
+            resolution="4K",
+        )
+    assert "1K resolution" in str(exc_info.value)
+
+
+def test_dialogue_model_conflicting_inputs():
+    with pytest.raises(ValidationError) as exc_info:
+        CreateVeoDto(
+            prompt="Character speaking in tavern",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.VEO_EXP_A2V_GENERATION,
+            start_image_asset_id={"id": 1, "type": "source_asset"},
+            reference_audio={"id": 2, "type": "source_asset"},
+            end_image_asset_id={"id": 3, "type": "source_asset"},
+            duration_seconds=8,
+            resolution="1K",
+        )
+    assert "only supports an image input and an audio reference" in str(
+        exc_info.value
+    )
+
+
+def test_omni_1_2_flash_allows_15s_text_to_video_and_10_ref_images():
+    dto_t2v = CreateVeoDto(
+        prompt="Epic 15-second camera flythrough",
+        workspace_id=1,
+        generation_model=GenerationModelEnum.GEMINI_OMNI_1_2_FLASH,
+        duration_seconds=15,
+    )
+    assert dto_t2v.duration_seconds == 15
+
+    dto_refs = CreateVeoDto(
+        prompt="Cast ensemble shot",
+        workspace_id=1,
+        generation_model=GenerationModelEnum.GEMINI_OMNI_1_2_FLASH,
+        duration_seconds=10,
+        reference_images=[{"asset_id": i} for i in range(1, 11)],
+    )
+    assert len(dto_refs.reference_images) == 10
+
+
+def test_omni_1_2_flash_rejects_over_10s_with_references():
+    with pytest.raises(ValidationError) as exc_info:
+        CreateVeoDto(
+            prompt="Too long for references",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.GEMINI_OMNI_1_2_FLASH,
+            duration_seconds=12,
+            reference_images=[{"asset_id": 1}],
+        )
+    assert "10" in str(exc_info.value)
+
+
+def test_veo_3_1_lite_preview_valid():
+    dto = CreateVeoDto(
+        prompt="Fast cinematic shot",
+        workspace_id=1,
+        generation_model=GenerationModelEnum.VEO_3_1_LITE_PREVIEW,
+        duration_seconds=8,
+        resolution="720p",
+    )
+    assert dto.generation_model == GenerationModelEnum.VEO_3_1_LITE_PREVIEW
+
+
+def test_gmp_perf_estimation_validation():
+    dto = CreateVeoDto(
+        prompt="",
+        workspace_id=1,
+        generation_model=GenerationModelEnum.VEO_EXP_PERF_ESTIMATION,
+        edit_source={"id": 10, "type": "source_asset"},
+        duration_seconds=10,
+    )
+    assert dto.generation_model == GenerationModelEnum.VEO_EXP_PERF_ESTIMATION
+
+    with pytest.raises(ValidationError, match="requires an input video"):
+        CreateVeoDto(
+            prompt="",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.VEO_EXP_PERF_ESTIMATION,
+            duration_seconds=8,
+        )
+
+    with pytest.raises(ValidationError, match="10 seconds"):
+        CreateVeoDto(
+            prompt="",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.VEO_EXP_PERF_ESTIMATION,
+            edit_source={"id": 10, "type": "source_asset"},
+            duration_seconds=12,
+        )
+
+
+def test_gmp_omni_perf_validation():
+    dto = CreateVeoDto(
+        prompt="Sci-fi pilot acting in cockpit",
+        workspace_id=1,
+        generation_model=GenerationModelEnum.OMNI_PERF,
+        reference_images=[{"asset_id": 1}, {"asset_id": 2}],
+        reference_video={"id": 5, "type": "source_asset"},
+        output_codec="prores",
+        compression_quality="lossless",
+        audio_control_mode="preserve_video_audio",
+        duration_seconds=10,
+    )
+    assert dto.output_codec == "prores"
+    assert dto.compression_quality == "lossless"
+
+    # Missing prompt
+    with pytest.raises(ValidationError, match="non-empty prompt"):
+        CreateVeoDto(
+            prompt="   ",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.OMNI_PERF,
+            reference_images=[{"asset_id": 1}],
+            reference_video={"id": 5, "type": "source_asset"},
+        )
+
+    # Missing reference images
+    with pytest.raises(
+        ValidationError, match="between 1 and 5 reference images"
+    ):
+        CreateVeoDto(
+            prompt="Acting",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.OMNI_PERF,
+            reference_video={"id": 5, "type": "source_asset"},
+        )
+
+    # Over 5 reference images
+    with pytest.raises(
+        ValidationError, match="between 1 and 5 reference images"
+    ):
+        CreateVeoDto(
+            prompt="Acting",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.OMNI_PERF,
+            reference_images=[{"asset_id": i} for i in range(6)],
+            reference_video={"id": 5, "type": "source_asset"},
+        )
+
+    # Missing driving video
+    with pytest.raises(ValidationError, match="driving performance"):
+        CreateVeoDto(
+            prompt="Acting",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.OMNI_PERF,
+            reference_images=[{"asset_id": 1}],
+        )
+
+    # target_audio without reference_audio
+    with pytest.raises(ValidationError, match="target_audio"):
+        CreateVeoDto(
+            prompt="Acting",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.OMNI_PERF,
+            reference_images=[{"asset_id": 1}],
+            reference_video={"id": 5, "type": "source_asset"},
+            audio_control_mode="target_audio",
+        )
+
+
+def test_gmp_omni_cine_validation():
+    dto = CreateVeoDto(
+        prompt="Cinematic crane shot over ancient ruins",
+        workspace_id=1,
+        generation_model=GenerationModelEnum.OMNI_CINE,
+        start_image_asset_id={"id": 1, "type": "source_asset"},
+        end_image_asset_id={"id": 2, "type": "source_asset"},
+        reference_images=[{"asset_id": i} for i in range(1, 8)],
+        reference_audio={"id": 9, "type": "source_asset"},
+        audio_control_mode="reference_audio",
+        duration_seconds=10,
+    )
+    assert len(dto.reference_images) == 7
+
+    # lastFrame without firstFrame rejected
+    with pytest.raises(ValidationError, match="lastFrame"):
+        CreateVeoDto(
+            prompt="Interpolate",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.OMNI_CINE,
+            end_image_asset_id={"id": 2, "type": "source_asset"},
+        )
+
+    # target_audio without audio rejected
+    with pytest.raises(ValidationError, match="reference_audio"):
+        CreateVeoDto(
+            prompt="Shot",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.OMNI_CINE,
+            audio_control_mode="target_audio",
+        )
+
+
+def test_gmp_video_textures_and_pro_format_validation():
+    dto = CreateVeoDto(
+        prompt="Flowing lava texture",
+        workspace_id=1,
+        generation_model=GenerationModelEnum.VEO_EXP_VIDEO_TEXTURES,
+        seamless_loop=True,
+        tessellate_horizontal=True,
+        tessellate_vertical=True,
+        output_codec="dnxhr",
+        compression_quality="lossless",
+    )
+    assert dto.seamless_loop is True
+
+    # Must enable at least one seamless flag
+    with pytest.raises(ValidationError, match="seamless"):
+        CreateVeoDto(
+            prompt="Lava",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.VEO_EXP_VIDEO_TEXTURES,
+        )
+
+    # Simultaneous looping + image conditioning rejected
+    with pytest.raises(
+        ValidationError,
+        match="Simultaneous looping and image conditioning is not supported",
+    ):
+        CreateVeoDto(
+            prompt="Lava",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.VEO_EXP_VIDEO_TEXTURES,
+            seamless_loop=True,
+            start_image_asset_id={"id": 1, "type": "source_asset"},
+        )
+
+    # Lossless with h264 rejected
+    with pytest.raises(
+        ValidationError,
+        match="Lossless compressionQuality requires output_codec",
+    ):
+        CreateVeoDto(
+            prompt="Shot",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.OMNI_CINE,
+            output_codec="h264",
+            compression_quality="lossless",
+        )

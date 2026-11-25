@@ -98,20 +98,65 @@ class GalleryService:
         if not asset_doc:
             return None
 
+        gcs_uri = (
+            asset_doc.gcs_uri
+            if isinstance(getattr(asset_doc, "gcs_uri", None), str)
+            else None
+        )
+        external_url = (
+            asset_doc.external_url
+            if isinstance(getattr(asset_doc, "external_url", None), str)
+            else None
+        )
+        thumbnail_gcs_uri = (
+            asset_doc.thumbnail_gcs_uri
+            if isinstance(getattr(asset_doc, "thumbnail_gcs_uri", None), str)
+            else None
+        )
+        raw_mime = getattr(asset_doc, "mime_type", None)
+        mime_type = (
+            str(raw_mime.value)
+            if hasattr(raw_mime, "value")
+            else (raw_mime if isinstance(raw_mime, str) else None)
+        )
+
+        if not gcs_uri:
+            from src.common.media_utils import extract_youtube_video_id
+
+            presigned_thumbnail_url = None
+            if thumbnail_gcs_uri:
+                presigned_thumbnail_url = await asyncio.to_thread(
+                    self.iam_signer_credentials.generate_presigned_url,
+                    thumbnail_gcs_uri,
+                )
+            elif external_url:
+                video_id = extract_youtube_video_id(external_url)
+                if video_id:
+                    presigned_thumbnail_url = (
+                        f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
+                    )
+            return SourceAssetLinkResponse(
+                **link.model_dump(),
+                presigned_url=external_url or "",
+                presigned_thumbnail_url=presigned_thumbnail_url,
+                gcs_uri=None,
+                mime_type=mime_type,
+                external_url=external_url,
+            )
+
         tasks = [
             asyncio.to_thread(
                 self.iam_signer_credentials.generate_presigned_url,
-                asset_doc.gcs_uri,
+                gcs_uri,
             ),
         ]
 
         # Check if the asset has a thumbnail and create a task for it.
-        # This requires the SourceAsset model to have a `thumbnail_gcs_uri` field.
-        if asset_doc.thumbnail_gcs_uri:
+        if thumbnail_gcs_uri:
             tasks.append(
                 asyncio.to_thread(
                     self.iam_signer_credentials.generate_presigned_url,
-                    asset_doc.thumbnail_gcs_uri,
+                    thumbnail_gcs_uri,
                 ),
             )
 
@@ -123,8 +168,9 @@ class GalleryService:
             **link.model_dump(),
             presigned_url=presigned_url,
             presigned_thumbnail_url=presigned_thumbnail_url,
-            gcs_uri=asset_doc.gcs_uri,
-            mime_type=asset_doc.mime_type,
+            gcs_uri=gcs_uri,
+            mime_type=mime_type,
+            external_url=external_url,
         )
 
     async def _enrich_source_media_item_link(
@@ -206,6 +252,25 @@ class GalleryService:
             if uri
         ]
 
+        # 1.6 Create tasks for ProRes / DNxHR master media URLs in raw_data
+        raw_data = (
+            item.raw_data
+            if isinstance(getattr(item, "raw_data", None), dict)
+            else {}
+        )
+        raw_master_uris = raw_data.get("master_gcs_uris") or []
+        all_master_gcs_uris = (
+            [u for u in raw_master_uris if isinstance(u, str) and u]
+            if isinstance(raw_master_uris, list)
+            else []
+        )
+        master_url_tasks = [
+            asyncio.to_thread(
+                self.iam_signer_credentials.generate_presigned_url, uri
+            )
+            for uri in all_master_gcs_uris
+        ]
+
         # 2. Create tasks for thumbnail URLs
         thumbnail_tasks = [
             asyncio.to_thread(
@@ -235,12 +300,14 @@ class GalleryService:
         (
             presigned_urls,
             original_presigned_urls,
+            master_presigned_urls,
             presigned_thumbnail_urls,
             enriched_source_assets_with_nones,
             enriched_source_media_items_with_nones,
         ) = await asyncio.gather(
             asyncio.gather(*main_url_tasks),
             asyncio.gather(*original_url_tasks),
+            asyncio.gather(*master_url_tasks),
             asyncio.gather(*thumbnail_tasks),
             asyncio.gather(*source_asset_tasks),
             asyncio.gather(*source_media_item_tasks),
@@ -258,6 +325,9 @@ class GalleryService:
             **item.model_dump(exclude={"source_assets"}),
             presigned_urls=presigned_urls,
             original_presigned_urls=original_presigned_urls,
+            master_presigned_urls=(
+                list(master_presigned_urls) if all_master_gcs_uris else None
+            ),
             presigned_thumbnail_urls=presigned_thumbnail_urls,
             enriched_source_assets=enriched_source_assets or None,
             enriched_source_media_items=enriched_source_media_items or None,
@@ -268,26 +338,31 @@ class GalleryService:
         item: UnifiedGalleryItemResponse,
     ) -> UnifiedGalleryItemResponse:
         """Enriches a UnifiedGalleryItemResponse with presigned URLs."""
+        uris_to_sign = [u for u in (item.gcs_uris or []) if u]
+        thumbnail_uris_to_sign = [u for u in (item.thumbnail_uris or []) if u]
+        master_uris_to_sign: list[str] = []
+        if isinstance(item.metadata, dict):
+            raw_master = item.metadata.get(
+                "masterGcsUris"
+            ) or item.metadata.get("master_gcs_uris")
+            if not raw_master:
+                nested_raw = item.metadata.get("rawData") or item.metadata.get(
+                    "raw_data"
+                )
+                if isinstance(nested_raw, dict):
+                    raw_master = nested_raw.get(
+                        "master_gcs_uris"
+                    ) or nested_raw.get("masterGcsUris")
+            if isinstance(raw_master, list):
+                master_uris_to_sign = [
+                    u for u in raw_master if isinstance(u, str) and u
+                ]
 
-        # Helper to safely get list or string as list
-        def as_list(val):
-            if isinstance(val, list):
-                return val
-            return [val] if val else []
-
-        uris_to_sign = []
-        thumbnail_uris_to_sign = []
-
-        uris_to_sign = item.gcs_uris or []
-        thumbnail_uris_to_sign = item.thumbnail_uris or []
-
-        # Create tasks
         url_tasks = [
             asyncio.to_thread(
                 self.iam_signer_credentials.generate_presigned_url, uri
             )
             for uri in uris_to_sign
-            if uri
         ]
 
         thumbnail_tasks = [
@@ -295,16 +370,49 @@ class GalleryService:
                 self.iam_signer_credentials.generate_presigned_url, uri
             )
             for uri in thumbnail_uris_to_sign
-            if uri
         ]
 
-        (presigned_urls, presigned_thumbnail_urls) = await asyncio.gather(
+        master_tasks = [
+            asyncio.to_thread(
+                self.iam_signer_credentials.generate_presigned_url, uri
+            )
+            for uri in master_uris_to_sign
+        ]
+
+        (
+            presigned_urls,
+            presigned_thumbnail_urls,
+            master_presigned_urls,
+        ) = await asyncio.gather(
             asyncio.gather(*url_tasks),
             asyncio.gather(*thumbnail_tasks),
+            asyncio.gather(*master_tasks),
         )
+
+        external_url = None
+        if isinstance(item.metadata, dict):
+            raw_ext = item.metadata.get("externalUrl") or item.metadata.get(
+                "external_url"
+            )
+            if isinstance(raw_ext, str) and raw_ext:
+                external_url = raw_ext
+
+        if not presigned_urls and external_url:
+            presigned_urls = [external_url]
+            if not presigned_thumbnail_urls:
+                from src.common.media_utils import extract_youtube_video_id
+
+                video_id = extract_youtube_video_id(external_url)
+                if video_id:
+                    presigned_thumbnail_urls = [
+                        f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
+                    ]
 
         item.presigned_urls = presigned_urls
         item.presigned_thumbnail_urls = presigned_thumbnail_urls
+        item.master_presigned_urls = (
+            list(master_presigned_urls) if master_uris_to_sign else None
+        )
         return item
 
     async def get_paginated_gallery(
@@ -315,13 +423,7 @@ class GalleryService:
         """Performs a paginated and filtered search for media items.
         Authorization is handled by a dependency in the controller.
         """
-        is_admin = UserRoleEnum.ADMIN in current_user.roles
-        # If the user is not an admin, force the search to only show completed items
-        if not is_admin:
-            search_dto.status = JobStatusEnum.COMPLETED
-
-        # Run the database query directly (it is async)
-        # We assume UnifiedGalleryRepository.query handles filtering
+        _ = current_user
         unified_items_query = await self.unified_gallery_repo.query(
             search_dto,
         )
@@ -566,7 +668,10 @@ class GalleryService:
                                 workspace_id=asset.workspace_id,
                                 user=current_user,
                             )
-                            if asset.gcs_uri:
+                            if (
+                                isinstance(getattr(asset, "gcs_uri", None), str)
+                                and asset.gcs_uri
+                            ):
                                 gcs_uri = asset.gcs_uri
                                 ext = (
                                     gcs_uri.split(".")[-1]
@@ -723,16 +828,27 @@ class GalleryService:
 
         return {"copied_count": copied_count}
 
-    async def stream_gcs_media(self, gcs_uri: str) -> StreamingResponse:
-        """Streams a GCS media file directly to the client for playback / preview."""
+    async def stream_gcs_media(
+        self,
+        gcs_uri: str,
+        range_header: str | None = None,
+    ) -> StreamingResponse:
+        """Streams a GCS media file directly to the client, supporting HTTP Range requests."""
         if not gcs_uri or not gcs_uri.startswith("gs://"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid GCS URI provided",
             )
 
+        uri_body = gcs_uri.replace("gs://", "", 1)
+        if "/" not in uri_body:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid GCS URI provided",
+            )
+
         try:
-            bucket_name, blob_name = gcs_uri.replace("gs://", "").split("/", 1)
+            bucket_name, blob_name = uri_body.split("/", 1)
             bucket = self.gcs_service.client.bucket(bucket_name)
             blob = bucket.blob(blob_name)
 
@@ -742,10 +858,113 @@ class GalleryService:
                     detail="Media file not found in storage",
                 )
 
-            content_type = blob.content_type
+            if not isinstance(getattr(blob, "size", None), int):
+                try:
+                    await asyncio.to_thread(blob.reload)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            total_size = (
+                blob.size
+                if isinstance(getattr(blob, "size", None), int)
+                else None
+            )
+
+            content_type = (
+                blob.content_type
+                if isinstance(getattr(blob, "content_type", None), str)
+                and blob.content_type
+                else None
+            )
             if not content_type:
                 guessed_type, _ = mimetypes.guess_type(blob_name)
                 content_type = guessed_type or "application/octet-stream"
+
+            safe_name = pathlib.Path(blob_name).name
+            base_headers = {
+                "Accept-Ranges": "bytes",
+                "Content-Disposition": f'inline; filename="{safe_name}"',
+                "Cache-Control": "public, max-age=3600",
+            }
+
+            if range_header and total_size is not None:
+                range_spec = range_header.strip()
+                if not range_spec.lower().startswith("bytes="):
+                    raise HTTPException(
+                        status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+                        detail="Invalid Range unit",
+                        headers={"Content-Range": f"bytes */{total_size}"},
+                    )
+
+                byte_range = range_spec[6:].split(",", 1)[0].strip()
+                if "-" not in byte_range or total_size == 0:
+                    raise HTTPException(
+                        status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+                        detail="Requested range not satisfiable",
+                        headers={"Content-Range": f"bytes */{total_size}"},
+                    )
+
+                start_str, end_str = byte_range.split("-", 1)
+                start_str = start_str.strip()
+                end_str = end_str.strip()
+
+                try:
+                    if start_str == "":
+                        if not end_str:
+                            raise ValueError("Empty range")
+                        suffix_len = int(end_str)
+                        if suffix_len <= 0:
+                            raise ValueError("Invalid suffix length")
+                        start = max(0, total_size - suffix_len)
+                        end = total_size - 1
+                    else:
+                        start = int(start_str)
+                        end = int(end_str) if end_str else total_size - 1
+                except ValueError as val_err:
+                    raise HTTPException(
+                        status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+                        detail="Malformed Range header",
+                        headers={"Content-Range": f"bytes */{total_size}"},
+                    ) from val_err
+
+                if start < 0 or start >= total_size or end < start:
+                    raise HTTPException(
+                        status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+                        detail="Requested range not satisfiable",
+                        headers={"Content-Range": f"bytes */{total_size}"},
+                    )
+
+                end = min(end, total_size - 1)
+                content_length = end - start + 1
+
+                def iter_range(
+                    byte_start: int = start,
+                    length: int = content_length,
+                ):
+                    remaining = length
+                    with blob.open("rb") as f:
+                        f.seek(byte_start)
+                        while remaining > 0:
+                            chunk = f.read(min(256 * 1024, remaining))
+                            if not chunk:
+                                break
+                            remaining -= len(chunk)
+                            yield chunk
+
+                partial_headers = {
+                    **base_headers,
+                    "Content-Range": f"bytes {start}-{end}/{total_size}",
+                    "Content-Length": str(content_length),
+                }
+                return StreamingResponse(
+                    iter_range(),
+                    status_code=status.HTTP_206_PARTIAL_CONTENT,
+                    media_type=content_type,
+                    headers=partial_headers,
+                )
+
+            if total_size is not None:
+                base_headers["Content-Length"] = str(total_size)
 
             def iter_blob():
                 with blob.open("rb") as f:
@@ -755,11 +974,7 @@ class GalleryService:
             return StreamingResponse(
                 iter_blob(),
                 media_type=content_type,
-                headers={
-                    "Accept-Ranges": "bytes",
-                    "Content-Disposition": f'inline; filename="{pathlib.Path(blob_name).name}"',
-                    "Cache-Control": "public, max-age=3600",
-                },
+                headers=base_headers,
             )
         except HTTPException:
             raise
@@ -768,4 +983,4 @@ class GalleryService:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=str(e),
-            )
+            ) from e

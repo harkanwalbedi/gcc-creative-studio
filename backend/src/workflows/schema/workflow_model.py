@@ -169,8 +169,8 @@ class GenerateImageInputs(BaseModel):
 
 class GenerateImageSettings(BaseModel):
     model: str
-    brand_guidelines: bool
-    aspect_ratio: str
+    brand_guidelines: bool = False
+    aspect_ratio: str = "1:1"
     resolution: Literal["1K", "2K", "4K"] = "1K"
 
 
@@ -188,8 +188,8 @@ class EditImageInputs(BaseModel):
 
 class EditImageSettings(BaseModel):
     model: str
-    brand_guidelines: bool
-    aspect_ratio: str
+    brand_guidelines: bool = False
+    aspect_ratio: str = "1:1"
     resolution: Literal["1K", "2K", "4K"] = "1K"
 
 
@@ -203,16 +203,19 @@ class EditImageStep(BaseStep[EditImageInputs, EditImageSettings]):
 class GenerateVideoInputs(BaseModel):
     prompt: StepOutputReference | str
     input_images: WorkflowInputItem | None = None
+    input_video: WorkflowInputItem | None = None
     start_frame: WorkflowInputItem | None = None
     end_frame: WorkflowInputItem | None = None
+    source_video: WorkflowInputItem | None = None
 
 
 class GenerateVideoSettings(BaseModel):
     model: str
-    brand_guidelines: bool
-    aspect_ratio: str
+    brand_guidelines: bool = False
+    aspect_ratio: str = "16:9"
+    duration_seconds: int = 8
     input_mode: str | None = None
-    resolution: Literal["1K", "2K", "4K"] = "1K"
+    resolution: Literal["1K", "2K", "4K", "360p", "720p", "1080p"] = "1K"
 
 
 class GenerateVideoStep(BaseStep[GenerateVideoInputs, GenerateVideoSettings]):

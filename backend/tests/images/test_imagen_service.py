@@ -150,75 +150,118 @@ class TestImagenServiceMethods:
 
     @pytest.mark.anyio
     async def test_upscale_image_success(self, imagen_service):
-        request_dto = UpscaleImagenDto(
-            user_image="gs://bucket/input.png",
-            upscale_factor="x4",
-            include_rai_reason=False,
-            enhance_input_image=False,
-            image_preservation_factor=1.0,
+        import io
+        from PIL import Image as PILImage
+
+        in_buf = io.BytesIO()
+        PILImage.new("RGB", (600, 400), color="blue").save(in_buf, format="PNG")
+        gen_buf = io.BytesIO()
+        PILImage.new("RGBA", (1024, 1024), color="red").save(
+            gen_buf, format="PNG"
+        )
+        imagen_service.gcs_service.download_bytes_from_gcs.side_effect = [
+            in_buf.getvalue(),
+            gen_buf.getvalue(),
+        ]
+        imagen_service.gcs_service.store_to_gcs.return_value = (
+            "gs://bucket/upscaled_images/resized.png"
         )
 
-        with patch(
-            "src.images.imagen_service.GenAIModelSetup.init"
-        ) as mock_init:
-            mock_client = MagicMock()
-            mock_init.return_value = mock_client
+        request_dto = UpscaleImagenDto(
+            user_image="gs://bucket/input.png",
+            upscale_factor="x2",
+            include_rai_reason=False,
+            enhance_input_image=True,
+            image_preservation_factor=0.85,
+        )
 
-            mock_response = MagicMock()
-            mock_generated_image = MagicMock()
-            mock_generated_image.image.image_bytes = b"fake_upscaled_bytes"
-            mock_generated_image.rai_filtered_reason = ""
-            mock_response.generated_images = [mock_generated_image]
+        with (
+            patch(
+                "src.images.imagen_service.GenAIModelSetup.get_global_client"
+            ) as mock_global_client,
+            patch(
+                "src.images.imagen_service.gemini_generate_image"
+            ) as mock_gemini_gen,
+        ):
+            mock_global_client.return_value = MagicMock()
+            mock_gen_img = MagicMock()
+            mock_gen_img.image.gcs_uri = "gs://bucket/raw_upscaled.png"
+            mock_gemini_gen.return_value = (mock_gen_img, None)
 
-            mock_client.models.upscale_image.return_value = mock_response
-
-            # Call
             result = await imagen_service.upscale_image(request_dto)
 
             assert result is not None
+            assert (
+                result.image.gcs_uri
+                == "gs://bucket/upscaled_images/resized.png"
+            )
+            assert "active enhancement" in result.enhanced_prompt
+            assert "strict preservation" in result.enhanced_prompt
+            assert mock_gemini_gen.call_args.kwargs["resolution"] == "2K"
 
     @pytest.mark.anyio
-    async def test_upscale_image_rai_filtered(self, imagen_service):
-        from src.images.dto.upscale_imagen_dto import UpscaleImagenDto
+    async def test_upscale_image_base64_and_preservation_tiers(
+        self, imagen_service
+    ):
+        import base64
+        import io
+        from PIL import Image as PILImage
 
-        request_dto = UpscaleImagenDto(
-            user_image="gs://bucket/input.png",
-            upscale_factor="x4",
+        in_buf = io.BytesIO()
+        PILImage.new("RGB", (1200, 1200), color="green").save(
+            in_buf, format="PNG"
         )
-        with patch(
-            "src.images.imagen_service.GenAIModelSetup.init"
-        ) as mock_init:
-            mock_client = MagicMock()
-            mock_init.return_value = mock_client
-            mock_response = MagicMock()
-            mock_generated_image = MagicMock()
-            mock_generated_image.image = None  # Crucial to trigger RAI branch!
-            mock_generated_image.rai_filtered_reason = "unsafeContent"
-            mock_response.generated_images = [mock_generated_image]
+        b64_img = base64.b64encode(in_buf.getvalue()).decode("utf-8")
+        imagen_service.gcs_service.download_bytes_from_gcs.return_value = None
 
-            mock_client.models.upscale_image.return_value = mock_response
-
-            with pytest.raises(
-                ValueError, match="Image upscaling filtered by RAI"
+        for factor, preservation, expected_phrase, expected_res in [
+            ("x4", 0.5, "balanced preservation", "4K"),
+            ("x3", 0.2, "creative detail generation", "4K"),
+            ("x2", None, "Faithfully preserve", "4K"),
+        ]:
+            request_dto = UpscaleImagenDto(
+                user_image=b64_img,
+                upscale_factor=factor,
+                image_preservation_factor=preservation,
+            )
+            with (
+                patch(
+                    "src.images.imagen_service.GenAIModelSetup.get_global_client"
+                ) as mock_global_client,
+                patch(
+                    "src.images.imagen_service.gemini_generate_image"
+                ) as mock_gemini_gen,
             ):
-                await imagen_service.upscale_image(request_dto)
+                mock_global_client.return_value = MagicMock()
+                mock_gen_img = MagicMock()
+                mock_gen_img.image.gcs_uri = "gs://bucket/upscaled_4k.png"
+                mock_gemini_gen.return_value = (mock_gen_img, None)
+
+                res = await imagen_service.upscale_image(request_dto)
+                assert res is not None
+                assert expected_phrase in res.enhanced_prompt
+                assert (
+                    mock_gemini_gen.call_args.kwargs["resolution"]
+                    == expected_res
+                )
 
     @pytest.mark.anyio
     async def test_upscale_image_no_data(self, imagen_service):
-        from src.images.dto.upscale_imagen_dto import UpscaleImagenDto
-
+        imagen_service.gcs_service.download_bytes_from_gcs.return_value = None
         request_dto = UpscaleImagenDto(
             user_image="gs://bucket/input.png",
             upscale_factor="x4",
         )
-        with patch(
-            "src.images.imagen_service.GenAIModelSetup.init"
-        ) as mock_init:
-            mock_client = MagicMock()
-            mock_init.return_value = mock_client
-            mock_response = MagicMock()
-            mock_response.generated_images = []  # Empty
-            mock_client.models.upscale_image.return_value = mock_response
+        with (
+            patch(
+                "src.images.imagen_service.GenAIModelSetup.get_global_client"
+            ) as mock_global_client,
+            patch(
+                "src.images.imagen_service.gemini_generate_image"
+            ) as mock_gemini_gen,
+        ):
+            mock_global_client.return_value = MagicMock()
+            mock_gemini_gen.return_value = (None, None)
 
             with pytest.raises(
                 ValueError,
@@ -1223,15 +1266,66 @@ def test_create_imagen_dto_validation_failures():
         )
     assert "Invalid generation model" in str(exc_info.value)
 
-    # 5. Unsupported editing model
+    # 5. Nano Banana 2 Lite only supports 1K resolution
+    with pytest.raises(ValidationError) as exc_info:
+        CreateImagenDto(
+            prompt="Edit image",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.GEMINI_3_1_FLASH_LITE_IMAGE,
+            source_asset_ids=[1],
+            resolution="2K",
+        )
+    assert "only supports 1K resolution" in str(exc_info.value)
+
+    # 6. Deprecated upscale model rejected on CreateImagenDto
     with pytest.raises(ValidationError) as exc_info:
         CreateImagenDto(
             prompt="Edit image",
             workspace_id=1,
             generation_model=GenerationModelEnum.IMAGEN_4_UPSCALE_PREVIEW,
-            source_asset_ids=[1],
         )
-    assert "does not support image editing" in str(exc_info.value)
+    assert "Invalid generation model" in str(exc_info.value)
+
+    # 7. Invalid YouTube URL rejected
+    with pytest.raises(ValidationError) as exc_info:
+        CreateImagenDto(
+            prompt="Analyze video",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE,
+            external_url="https://evil.example.com/watch?v=dQw4w9WgXcQ",
+        )
+    assert "valid YouTube video URL" in str(exc_info.value)
+
+    # 8. Mutual exclusion between reference_video and external_url
+    with pytest.raises(ValidationError) as exc_info:
+        CreateImagenDto(
+            prompt="Analyze video",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE,
+            reference_video={"id": 1, "type": "source_asset"},
+            external_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        )
+    assert "simultaneously" in str(exc_info.value)
+
+    # 9. AspectRatioEnum.AUTO requires reference inputs
+    with pytest.raises(ValidationError) as exc_info:
+        CreateImagenDto(
+            prompt="No refs",
+            workspace_id=1,
+            generation_model=GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE,
+            aspect_ratio=AspectRatioEnum.AUTO,
+        )
+    assert "Aspect ratio 'auto'" in str(exc_info.value)
+
+    # 10. Valid YouTube external_url + AspectRatioEnum.AUTO
+    valid_yt_dto = CreateImagenDto(
+        prompt="Create poster from YouTube clip",
+        workspace_id=1,
+        generation_model=GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE,
+        external_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        aspect_ratio=AspectRatioEnum.AUTO,
+    )
+    assert valid_yt_dto.aspect_ratio == AspectRatioEnum.AUTO
 
 
 def test_upscale_imagen_dto_validation_failures():
@@ -1255,6 +1349,13 @@ def test_upscale_imagen_dto_validation_failures():
             user_image="base64str", mime_type=MimeTypeEnum.AUDIO_WAV
         )
     assert "Invalid mime type" in str(exc_info.value)
+
+    # 3. Out-of-bounds preservation factor
+    with pytest.raises(ValidationError):
+        UpscaleImagenDto(
+            user_image="base64str",
+            image_preservation_factor=1.5,
+        )
 
 
 def test_vto_dto_validation_failures():
@@ -1315,3 +1416,109 @@ def test_gemini_generate_image_omits_temperature_when_unset():
 
     config = mock_client.models.generate_content.call_args.kwargs["config"]
     assert config.temperature is None
+
+
+def test_gemini_generate_image_auto_aspect_ratio_and_reference_parts():
+    """AspectRatioEnum.AUTO omits aspect_ratio on ImageConfig and forwards video parts."""
+    from google.genai import types
+
+    mock_client = MagicMock()
+    mock_client.models.generate_content.return_value = MagicMock(candidates=[])
+    video_part = types.Part.from_uri(
+        file_uri="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        mime_type="video/mp4",
+    )
+
+    gemini_generate_image(
+        gcs_service=MagicMock(),
+        vertexai_client=mock_client,
+        prompt="Extract a cinematic frame",
+        model=GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE,
+        bucket_name="bucket",
+        reference_parts=[video_part],
+        aspect_ratio="auto",
+    )
+
+    call_kwargs = mock_client.models.generate_content.call_args.kwargs
+    assert call_kwargs["config"].image_config.aspect_ratio is None
+    sent_parts = call_kwargs["contents"][0].parts
+    assert len(sent_parts) == 2
+
+
+@patch("src.images.imagen_service.generate_image_thumbnail_from_gcs")
+@patch("src.database.WorkerDatabase")
+@patch("src.images.imagen_service.GenAIModelSetup.get_global_client")
+def test_process_image_in_background_youtube_reference_sync(
+    mock_global_client,
+    mock_worker_db_class,
+    mock_thumb,
+    sample_user,
+):
+    """Persists a YOUTUBE_VIDEO SourceAsset and links YOUTUBE_VIDEO_REFERENCE."""
+    mock_thumb.return_value = "gs://bucket/yt_thumb.png"
+    mock_db_context = AsyncMock()
+    mock_db_factory = MagicMock(return_value=mock_db_context)
+    mock_worker_db_class.return_value.__aenter__.return_value = mock_db_factory
+
+    mock_client = MagicMock()
+    mock_global_client.return_value = mock_client
+
+    dto = CreateImagenDto(
+        workspace_id=1,
+        prompt="Turn this YouTube scene into watercolor",
+        generation_model=GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE,
+        external_url="https://www.youtube.com/shorts/dQw4w9WgXcQ",
+        aspect_ratio=AspectRatioEnum.AUTO,
+        number_of_media=1,
+    )
+
+    with (
+        patch(
+            "src.images.imagen_service.MediaRepository"
+        ) as mock_media_repo_cls,
+        patch(
+            "src.images.imagen_service.SourceAssetRepository"
+        ) as mock_sa_repo_cls,
+        patch("src.images.imagen_service.UserRepository") as mock_user_repo_cls,
+        patch("src.images.imagen_service.GcsService") as mock_gcs_cls,
+        patch(
+            "src.images.imagen_service.gemini_generate_image"
+        ) as mock_gemini_gen,
+    ):
+        mock_media_repo = AsyncMock()
+        mock_media_repo.get_by_id.return_value = MagicMock(user_id=1)
+        mock_media_repo_cls.return_value = mock_media_repo
+
+        mock_sa_repo = AsyncMock()
+        mock_sa_repo.find_by_external_url.return_value = None
+        created_yt_asset = MagicMock()
+        created_yt_asset.id = 777
+        mock_sa_repo.create.return_value = created_yt_asset
+        mock_sa_repo_cls.return_value = mock_sa_repo
+
+        mock_user_repo = AsyncMock()
+        mock_user_repo.get_by_email.return_value = sample_user
+        mock_user_repo_cls.return_value = mock_user_repo
+
+        mock_gcs = MagicMock()
+        mock_gcs.bucket_name = "bucket"
+        mock_gcs_cls.return_value = mock_gcs
+
+        mock_gen_img = MagicMock()
+        mock_gen_img.image.gcs_uri = "gs://bucket/yt_out.png"
+        mock_gemini_gen.return_value = (mock_gen_img, None)
+
+        _process_image_in_background(
+            media_item_id=501,
+            request_dto=dto,
+            current_user=sample_user,
+        )
+
+        mock_sa_repo.create.assert_called_once()
+        mock_media_repo.update.assert_called()
+        update_payload = mock_media_repo.update.call_args_list[-1].args[1]
+        assert update_payload["status"] == JobStatusEnum.COMPLETED
+        assert (
+            update_payload["source_assets"][0]["role"]
+            == AssetRoleEnum.YOUTUBE_VIDEO_REFERENCE
+        )

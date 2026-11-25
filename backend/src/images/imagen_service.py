@@ -38,7 +38,11 @@ from src.common.base_dto import (
     GenerationModelEnum,
     MimeTypeEnum,
 )
-from src.common.media_utils import generate_image_thumbnail_from_gcs
+from src.common.media_utils import (
+    extract_youtube_video_id,
+    generate_image_thumbnail_from_gcs,
+    get_youtube_aspect_ratio,
+)
 from src.common.schema.genai_model_setup import GenAIModelSetup
 from src.common.schema.media_item_model import (
     AssetRoleEnum,
@@ -67,7 +71,9 @@ from src.source_assets.repository.source_asset_repository import (
 from src.source_assets.schema.source_asset_model import (
     AssetScopeEnum,
     AssetTypeEnum,
+    SourceAssetModel,
 )
+from src.users.repository.user_repository import UserRepository
 from src.users.user_model import UserModel
 
 logger = logging.getLogger(__name__)
@@ -161,8 +167,14 @@ def _process_vto_in_background(
                                 request_dto.workspace_id
                             )
                             if ws:
-                                target_project_id = ws.gcp_project_id
-                                target_bucket_name = ws.gcs_bucket_name
+                                if isinstance(
+                                    getattr(ws, "gcp_project_id", None), str
+                                ):
+                                    target_project_id = ws.gcp_project_id
+                                if isinstance(
+                                    getattr(ws, "gcs_bucket_name", None), str
+                                ):
+                                    target_bucket_name = ws.gcs_bucket_name
                         except Exception as e:
                             worker_logger.warning(
                                 "Could not fetch workspace config: %s", e
@@ -490,32 +502,27 @@ def gemini_generate_image(
     model: GenerationModelEnum,
     bucket_name: str,
     reference_images: list[types.Image] | None = None,
+    reference_parts: list[types.Part] | None = None,
     aspect_ratio: str | None = None,
     google_search: bool = False,
     resolution: str | None = None,
     temperature: float | None = None,
-) -> types.GeneratedImage | None:
+) -> tuple[types.GeneratedImage | None, dict | None]:
     """Generates an image using the Gemini API for text-to-image or
     image-to-image.
     This is a blocking function.
 
     Returns:
-        A types.GeneratedImage object, or None if failed.
+        A (types.GeneratedImage | None, grounding_metadata | None) tuple.
 
     """
     if not model.is_gemini_image_model:
         raise ValueError(f"Model {model.value} is not a Gemini image model.")
     for attempt in range(3):
         try:
-            # Build the parts for the content, including the prompt and any
-            # reference images
             parts = [types.Part.from_text(text=prompt)]
             if reference_images:
                 for img in reference_images:
-                    # The from_image helper was removed. We now use from_uri
-                    # for GCS paths.
-                    # The mime_type is automatically inferred by the SDK if
-                    # not provided.
                     if img.gcs_uri:
                         parts.append(
                             types.Part.from_uri(
@@ -523,18 +530,30 @@ def gemini_generate_image(
                                 mime_type=img.mime_type,
                             ),
                         )
+                    elif img.image_bytes:
+                        parts.append(
+                            types.Part.from_bytes(
+                                data=img.image_bytes,
+                                mime_type=img.mime_type or "image/png",
+                            ),
+                        )
+            if reference_parts:
+                parts.extend(reference_parts)
 
             contents: list[types.ContentUnionDict] = [
                 types.Content(role="user", parts=parts),
             ]
 
+            aspect_ratio_val = getattr(aspect_ratio, "value", aspect_ratio)
+            if aspect_ratio_val in ("auto", AspectRatioEnum.AUTO):
+                aspect_ratio_val = None
+
             image_config = types.ImageConfig(
-                aspect_ratio=aspect_ratio,
+                aspect_ratio=aspect_ratio_val,
                 image_size=resolution,
             )
 
             tools = []
-
             if google_search:
                 tools.append(types.Tool(google_search=types.GoogleSearch()))
 
@@ -546,9 +565,14 @@ def gemini_generate_image(
                 # than us pinning one.
                 temperature=temperature,
             )
+            client_to_use = (
+                vertexai_client
+                if vertexai_client is not None
+                else GenAIModelSetup.get_global_client()
+            )
             response: types.GenerateContentResponse = (
-                vertexai_client.models.generate_content(
-                    model=model,
+                client_to_use.models.generate_content(
+                    model=getattr(model, "value", model),
                     contents=contents,
                     config=generate_content_config,
                 )
@@ -561,7 +585,6 @@ def gemini_generate_image(
                     candidate.grounding_metadata
                     and candidate.grounding_metadata.grounding_chunks
                 ):
-                    # Capture grounding metadata if present
                     grounding_metadata = (
                         candidate.grounding_metadata.model_dump()
                     )
@@ -569,14 +592,11 @@ def gemini_generate_image(
                 if candidate.content and candidate.content.parts:
                     for part in candidate.content.parts:
                         if part.inline_data:
-                            # The API returns image data as a base64 encoded
-                            # string
                             image_data_base64 = part.inline_data.data or ""
                             content_type = (
                                 part.inline_data.mime_type or "image/png"
                             )
 
-                            # Upload using our GCS service
                             image_url = gcs_service.store_to_gcs(
                                 folder="gemini_images",
                                 file_name=str(uuid.uuid4()),
@@ -588,25 +608,23 @@ def gemini_generate_image(
                                 logger.debug("Error: image url not generated ")
                                 return None, None
 
-                            # Create a standard types.Image object
                             image_object = types.Image(
                                 gcs_uri=image_url,
                                 mime_type=content_type,
                             )
-                            # Wrap it in a types.GeneratedImage and return
-                            # along with grounding metadata
                             return (
                                 types.GeneratedImage(image=image_object),
                                 grounding_metadata,
                             )
 
             logger.debug("No image data found in the API response stream.")
-            return None, None  # Return None if no image was found
+            return None, None
         except Exception as e:
             if "429" in str(e) and attempt < 2:
                 time.sleep(2**attempt + random.random())
                 continue
             raise e
+    return None, None
 
 
 # --- STANDALONE WORKER FUNCTION ---
@@ -617,21 +635,10 @@ def _process_image_in_background(
 ):
     """Background worker to handle image generation, GCS upload, and DB
     update."""
-    import asyncio
-    import os
-    import sys
-
-    # google.cloud.logging moved to top level
-
-    from src.brand_guidelines.repository.brand_guideline_repository import (
-        BrandGuidelineRepository,
-    )
-
     worker_logger = logging.getLogger(f"image_worker.{media_item_id}")
     worker_logger.setLevel(logging.INFO)
 
     try:
-        # Configure logging for the worker process
         if worker_logger.hasHandlers():
             worker_logger.handlers.clear()
 
@@ -650,18 +657,15 @@ def _process_image_in_background(
             handler.setFormatter(formatter)
             worker_logger.addHandler(handler)
 
-        # Create a new event loop for this process
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-
-        # WorkerDatabase moved to top level
 
         async def _async_worker():
             async with WorkerDatabase() as db_factory:
                 async with db_factory() as db:
-                    # Create new instances of dependencies within this process
                     media_repo = MediaRepository(db)
                     source_asset_repo = SourceAssetRepository(db)
+                    user_repo = UserRepository(db)
                     brand_guideline_repo = BrandGuidelineRepository(db)
                     gemini_service = GeminiService(
                         brand_guideline_repo=brand_guideline_repo,
@@ -675,8 +679,14 @@ def _process_image_in_background(
                                 request_dto.workspace_id
                             )
                             if ws:
-                                target_project_id = ws.gcp_project_id
-                                target_bucket_name = ws.gcs_bucket_name
+                                if isinstance(
+                                    getattr(ws, "gcp_project_id", None), str
+                                ):
+                                    target_project_id = ws.gcp_project_id
+                                if isinstance(
+                                    getattr(ws, "gcs_bucket_name", None), str
+                                ):
+                                    target_bucket_name = ws.gcs_bucket_name
                         except Exception as e:
                             worker_logger.warning(
                                 "Could not fetch workspace config: %s", e
@@ -689,15 +699,28 @@ def _process_image_in_background(
                     iam_signer_credentials = IamSignerCredentials()
                     cfg = config_service
 
-                    # Initialize GenAI client in the worker process
-                    client = GenAIModelSetup.init(project_id=target_project_id)
+                    if request_dto.generation_model.is_gemini_image_model:
+                        try:
+                            client = GenAIModelSetup.get_global_client(
+                                project_id=target_project_id
+                            )
+                        except Exception as global_err:
+                            worker_logger.warning(
+                                "Falling back to regional GenAI client: %s",
+                                global_err,
+                            )
+                            client = GenAIModelSetup.init(
+                                project_id=target_project_id
+                            )
+                    else:
+                        client = GenAIModelSetup.init(
+                            project_id=target_project_id
+                        )
 
-                    # --- GENERATION LOGIC ---
                     start_time = time.monotonic()
                     effective_bucket = target_bucket_name or cfg.GENMEDIA_BUCKET
                     gcs_output_directory = f"gs://{effective_bucket}"
 
-                    # original_prompt was unused
                     if request_dto.enhance_prompt:
                         rewritten_prompt = (
                             await gemini_service.enhance_prompt_from_dto(
@@ -710,70 +733,326 @@ def _process_image_in_background(
                         rewritten_prompt = request_dto.prompt
 
                     source_assets: list[SourceAssetLink] = []
+                    source_media_items_list: list[SourceMediaItemLink] = []
                     reference_images_for_api: list[types.Image] = []
+                    reference_parts_for_api: list[types.Part] = []
                     grounding_metadata = None
 
-                    if request_dto.source_asset_ids:
-                        for asset_id in request_dto.source_asset_ids:
-                            source_asset = await source_asset_repo.get_by_id(
-                                asset_id
-                            )
-                            if source_asset:
-                                source_assets.append(
-                                    SourceAssetLink(
-                                        asset_id=asset_id,
-                                        role=AssetRoleEnum.INPUT,
-                                    ),
-                                )
-                                reference_images_for_api.append(
-                                    types.Image(
-                                        gcs_uri=source_asset.gcs_uri,
-                                        mime_type=source_asset.mime_type,
-                                    ),
-                                )
-                            else:
-                                worker_logger.warning(
-                                    "Source asset with ID %s not found.",
-                                    asset_id,
-                                )
-
-                    if request_dto.source_media_items:
-                        for gen_input in request_dto.source_media_items:
-                            parent_item = await media_repo.get_by_id(
-                                gen_input.media_item_id,
-                            )
-                            if (
-                                parent_item
-                                and parent_item.gcs_uris
-                                and 0
-                                <= gen_input.media_index
-                                < len(parent_item.gcs_uris)
-                            ):
-                                gcs_uri = parent_item.gcs_uris[
-                                    gen_input.media_index
-                                ]
-                                reference_images_for_api.append(
-                                    types.Image(
-                                        gcs_uri=gcs_uri,
-                                        mime_type=parent_item.mime_type,
-                                    ),
-                                )
-                            else:
-                                worker_logger.warning(
-                                    "Could not find or use generated_input: %s at index %s",
-                                    gen_input.media_item_id,
-                                    gen_input.media_index,
-                                )
-
-                    all_generated_images: list[types.GeneratedImage] = []
-
                     try:
+                        if request_dto.source_asset_ids:
+                            for asset_id in request_dto.source_asset_ids:
+                                source_asset = (
+                                    await source_asset_repo.get_by_id(asset_id)
+                                )
+                                if source_asset:
+                                    ext_url = (
+                                        source_asset.external_url
+                                        if isinstance(
+                                            getattr(
+                                                source_asset,
+                                                "external_url",
+                                                None,
+                                            ),
+                                            str,
+                                        )
+                                        else None
+                                    )
+                                    is_youtube = getattr(
+                                        source_asset, "asset_type", None
+                                    ) == AssetTypeEnum.YOUTUBE_VIDEO or bool(
+                                        ext_url
+                                        and extract_youtube_video_id(ext_url)
+                                    )
+                                    if is_youtube and ext_url:
+                                        source_assets.append(
+                                            SourceAssetLink(
+                                                asset_id=asset_id,
+                                                role=AssetRoleEnum.YOUTUBE_VIDEO_REFERENCE,
+                                            ),
+                                        )
+                                        reference_parts_for_api.append(
+                                            types.Part.from_uri(
+                                                file_uri=ext_url,
+                                                mime_type="video/mp4",
+                                            )
+                                        )
+                                    elif getattr(source_asset, "gcs_uri", None):
+                                        source_assets.append(
+                                            SourceAssetLink(
+                                                asset_id=asset_id,
+                                                role=AssetRoleEnum.INPUT,
+                                            ),
+                                        )
+                                        reference_images_for_api.append(
+                                            types.Image(
+                                                gcs_uri=source_asset.gcs_uri,
+                                                mime_type=source_asset.mime_type,
+                                            ),
+                                        )
+                                    else:
+                                        worker_logger.warning(
+                                            "Source asset with ID %s has no "
+                                            "GCS URI or external URL.",
+                                            asset_id,
+                                        )
+                                else:
+                                    worker_logger.warning(
+                                        "Source asset with ID %s not found.",
+                                        asset_id,
+                                    )
+
+                        if request_dto.source_media_items:
+                            for gen_input in request_dto.source_media_items:
+                                source_media_items_list.append(gen_input)
+                                parent_item = await media_repo.get_by_id(
+                                    gen_input.media_item_id,
+                                )
+                                if (
+                                    parent_item
+                                    and parent_item.gcs_uris
+                                    and 0
+                                    <= gen_input.media_index
+                                    < len(parent_item.gcs_uris)
+                                ):
+                                    gcs_uri = parent_item.gcs_uris[
+                                        gen_input.media_index
+                                    ]
+                                    is_youtube = isinstance(
+                                        gcs_uri, str
+                                    ) and bool(
+                                        extract_youtube_video_id(gcs_uri)
+                                    )
+                                    if is_youtube:
+                                        reference_parts_for_api.append(
+                                            types.Part.from_uri(
+                                                file_uri=gcs_uri,
+                                                mime_type="video/mp4",
+                                            )
+                                        )
+                                    else:
+                                        reference_images_for_api.append(
+                                            types.Image(
+                                                gcs_uri=gcs_uri,
+                                                mime_type=parent_item.mime_type,
+                                            ),
+                                        )
+                                else:
+                                    worker_logger.warning(
+                                        "Could not find or use "
+                                        "generated_input: %s at index %s",
+                                        gen_input.media_item_id,
+                                        gen_input.media_index,
+                                    )
+
+                        if request_dto.reference_video:
+                            ref = request_dto.reference_video
+                            if ref.type == "media_item":
+                                parent_item = await media_repo.get_by_id(ref.id)
+                                if parent_item and parent_item.gcs_uris:
+                                    index = ref.index or 0
+                                    if not (
+                                        0 <= index < len(parent_item.gcs_uris)
+                                    ):
+                                        raise ValueError(
+                                            f"Reference media item {ref.id} "
+                                            f"index {index} is out of bounds."
+                                        )
+                                    ref_uri = parent_item.gcs_uris[index]
+                                    is_youtube = isinstance(
+                                        ref_uri, str
+                                    ) and bool(
+                                        extract_youtube_video_id(ref_uri)
+                                    )
+                                    if is_youtube:
+                                        reference_parts_for_api.append(
+                                            types.Part.from_uri(
+                                                file_uri=ref_uri,
+                                                mime_type="video/mp4",
+                                            )
+                                        )
+                                        source_media_items_list.append(
+                                            SourceMediaItemLink(
+                                                media_item_id=ref.id,
+                                                media_index=index,
+                                                role=AssetRoleEnum.YOUTUBE_VIDEO_REFERENCE,
+                                            )
+                                        )
+                                    else:
+                                        mime_str = getattr(
+                                            parent_item.mime_type,
+                                            "value",
+                                            parent_item.mime_type,
+                                        )
+                                        reference_parts_for_api.append(
+                                            types.Part.from_uri(
+                                                file_uri=ref_uri,
+                                                mime_type=mime_str,
+                                            )
+                                        )
+                                        source_media_items_list.append(
+                                            SourceMediaItemLink(
+                                                media_item_id=ref.id,
+                                                media_index=index,
+                                                role=AssetRoleEnum.VIDEO_REFERENCE,
+                                            )
+                                        )
+                                else:
+                                    raise ValueError(
+                                        f"Reference media item {ref.id} not "
+                                        "found or has no uris."
+                                    )
+                            else:
+                                video_asset = await source_asset_repo.get_by_id(
+                                    ref.id
+                                )
+                                if video_asset:
+                                    ext_url = (
+                                        video_asset.external_url
+                                        if isinstance(
+                                            getattr(
+                                                video_asset,
+                                                "external_url",
+                                                None,
+                                            ),
+                                            str,
+                                        )
+                                        else None
+                                    )
+                                    is_youtube = getattr(
+                                        video_asset, "asset_type", None
+                                    ) == AssetTypeEnum.YOUTUBE_VIDEO or bool(
+                                        ext_url
+                                        and extract_youtube_video_id(ext_url)
+                                    )
+                                    if is_youtube and ext_url:
+                                        reference_parts_for_api.append(
+                                            types.Part.from_uri(
+                                                file_uri=ext_url,
+                                                mime_type="video/mp4",
+                                            )
+                                        )
+                                        source_assets.append(
+                                            SourceAssetLink(
+                                                asset_id=ref.id,
+                                                role=AssetRoleEnum.YOUTUBE_VIDEO_REFERENCE,
+                                            )
+                                        )
+                                    elif getattr(video_asset, "gcs_uri", None):
+                                        mime_str = getattr(
+                                            video_asset.mime_type,
+                                            "value",
+                                            video_asset.mime_type,
+                                        )
+                                        reference_parts_for_api.append(
+                                            types.Part.from_uri(
+                                                file_uri=video_asset.gcs_uri,
+                                                mime_type=mime_str,
+                                            )
+                                        )
+                                        source_assets.append(
+                                            SourceAssetLink(
+                                                asset_id=ref.id,
+                                                role=AssetRoleEnum.VIDEO_REFERENCE,
+                                            )
+                                        )
+                                    else:
+                                        raise ValueError(
+                                            f"Reference video asset {ref.id} "
+                                            "has no valid URI/URL."
+                                        )
+                                else:
+                                    raise ValueError(
+                                        f"Reference video asset {ref.id} "
+                                        "not found."
+                                    )
+
+                        if request_dto.external_url:
+                            youtube_url = request_dto.external_url
+                            user_id = getattr(current_user, "id", None)
+                            ws_id = request_dto.workspace_id
+
+                            media_item_obj = await media_repo.get_by_id(
+                                media_item_id
+                            )
+                            if media_item_obj is not None:
+                                if isinstance(
+                                    getattr(
+                                        media_item_obj, "workspace_id", None
+                                    ),
+                                    int,
+                                ):
+                                    ws_id = media_item_obj.workspace_id
+                                if isinstance(
+                                    getattr(media_item_obj, "user_id", None),
+                                    int,
+                                ):
+                                    user_id = media_item_obj.user_id
+                                elif isinstance(
+                                    getattr(media_item_obj, "user_email", None),
+                                    str,
+                                ):
+                                    resolved_user = (
+                                        await user_repo.get_by_email(
+                                            media_item_obj.user_email
+                                        )
+                                    )
+                                    if resolved_user and isinstance(
+                                        getattr(resolved_user, "id", None), int
+                                    ):
+                                        user_id = resolved_user.id
+
+                            if not user_id:
+                                raise ValueError(
+                                    "User ID could not be determined."
+                                )
+
+                            youtube_asset = (
+                                await source_asset_repo.find_by_external_url(
+                                    user_id=user_id,
+                                    external_url=youtube_url,
+                                )
+                            )
+                            if not youtube_asset:
+                                new_asset_model = SourceAssetModel(
+                                    workspace_id=ws_id,
+                                    user_id=user_id,
+                                    gcs_uri=None,
+                                    original_filename="YouTube Video",
+                                    mime_type=MimeTypeEnum.VIDEO_MP4,
+                                    aspect_ratio=AspectRatioEnum(
+                                        get_youtube_aspect_ratio(youtube_url)
+                                    ),
+                                    file_hash=None,
+                                    scope=AssetScopeEnum.PRIVATE,
+                                    asset_type=AssetTypeEnum.YOUTUBE_VIDEO,
+                                    external_url=youtube_url,
+                                )
+                                youtube_asset = await source_asset_repo.create(
+                                    new_asset_model
+                                )
+
+                            source_assets.append(
+                                SourceAssetLink(
+                                    asset_id=youtube_asset.id,
+                                    role=AssetRoleEnum.YOUTUBE_VIDEO_REFERENCE,
+                                )
+                            )
+                            reference_parts_for_api.append(
+                                types.Part.from_uri(
+                                    file_uri=youtube_url,
+                                    mime_type="video/mp4",
+                                )
+                            )
+
+                        all_generated_images: list[types.GeneratedImage] = []
+
                         # --- PATH 1: TEXT-TO-IMAGE GENERATION ---
-                        if not reference_images_for_api:
+                        if (
+                            not reference_images_for_api
+                            and not reference_parts_for_api
+                        ):
                             model = request_dto.generation_model
                             if model.is_gemini_image_model:
-                                # --- GEMINI FLASH TEXT-TO-IMAGE ---
-                                # Run async tasks in the worker's event loop
                                 tasks = [
                                     asyncio.to_thread(
                                         gemini_generate_image,
@@ -797,9 +1076,6 @@ def _process_image_in_background(
                                     for img, _ in gemini_images_response
                                     if img
                                 ]
-                                # Store grounding metadata from the first image
-                                # (assuming it applies to all in the batch for
-                                # now)
                                 if (
                                     gemini_images_response
                                     and gemini_images_response[0][1]
@@ -808,8 +1084,6 @@ def _process_image_in_background(
                                         0
                                     ][1]
                             else:
-                                # --- OTHER IMAGEN MODELS (TEXT-TO-IMAGE):
-                                # Single Batch API Call ---
                                 for attempt in range(3):
                                     try:
                                         images_imagen_response = await asyncio.to_thread(
@@ -823,8 +1097,10 @@ def _process_image_in_background(
                                                 output_gcs_uri=(
                                                     gcs_output_directory
                                                 ),
-                                                aspect_ratio=(
-                                                    request_dto.aspect_ratio
+                                                aspect_ratio=getattr(
+                                                    request_dto.aspect_ratio,
+                                                    "value",
+                                                    request_dto.aspect_ratio,
                                                 ),
                                                 negative_prompt=(
                                                     request_dto.negative_prompt
@@ -847,9 +1123,8 @@ def _process_image_in_background(
                                     images_imagen_response.generated_images
                                     or []
                                 )
-                        # --- PATH 2: IMAGE EDITING (IMAGE-TO-IMAGE) ---
+                        # --- PATH 2: IMAGE EDITING (IMAGE-TO-IMAGE / VIDEO REF) ---
                         elif request_dto.generation_model.is_gemini_image_model:
-                            # --- GEMINI FLASH IMAGE-TO-IMAGE ---
                             tasks = [
                                 asyncio.to_thread(
                                     gemini_generate_image,
@@ -859,6 +1134,7 @@ def _process_image_in_background(
                                     prompt=request_dto.prompt,
                                     bucket_name=gcs_service.bucket_name,
                                     reference_images=reference_images_for_api,
+                                    reference_parts=reference_parts_for_api,
                                     aspect_ratio=request_dto.aspect_ratio,
                                     google_search=request_dto.google_search,
                                     resolution=request_dto.resolution,
@@ -872,7 +1148,6 @@ def _process_image_in_background(
                             all_generated_images = [
                                 img for img, _ in gemini_images_response if img
                             ]
-                            # Store grounding metadata from the first image
                             if (
                                 gemini_images_response
                                 and gemini_images_response[0][1]
@@ -881,9 +1156,6 @@ def _process_image_in_background(
                                     1
                                 ]
                         else:
-                            # --- IMAGEN MODELS (IMAGE-TO-IMAGE) ---
-                            # The DTO validation ensures we only have one
-                            # source image here.
                             raw_ref_image = types._ReferenceImageAPI(
                                 reference_id=1,
                                 reference_image=reference_images_for_api[0],
@@ -926,8 +1198,6 @@ def _process_image_in_background(
                             return
 
                         # --- UNIFIED PROCESSING AND SAVING ---
-                        # Create the list of permanent GCS URIs and the
-                        # response for the frontend
                         valid_generated_images = [
                             img
                             for img in all_generated_images
@@ -946,7 +1216,7 @@ def _process_image_in_background(
                             upscale_dtos: list[UpscaleImagenDto] = [
                                 UpscaleImagenDto(
                                     generation_model=(
-                                        GenerationModelEnum.IMAGEN_4_UPSCALE_PREVIEW
+                                        GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE
                                     ),
                                     user_image=img.image.gcs_uri or "",
                                     mime_type=(
@@ -960,8 +1230,6 @@ def _process_image_in_background(
                                 for img in valid_generated_images
                                 if img.image
                             ]
-                            # Instantiate a temporary service to use its
-                            # upscale_image method
                             service = ImagenService(
                                 media_repo=media_repo,
                                 source_asset_repo=source_asset_repo,
@@ -987,7 +1255,6 @@ def _process_image_in_background(
                                 if img.image and img.image.gcs_uri
                             ]
 
-                        # Generate thumbnails
                         thumbnail_uris = []
                         for uri in permanent_gcs_uris:
                             thumb_uri = generate_image_thumbnail_from_gcs(
@@ -1003,7 +1270,6 @@ def _process_image_in_background(
                         end_time = time.monotonic()
                         generation_time = end_time - start_time
 
-                        # Update the MediaItem in Firestore
                         update_data = {
                             "status": JobStatusEnum.COMPLETED,
                             "prompt": rewritten_prompt,
@@ -1020,9 +1286,9 @@ def _process_image_in_background(
                             "source_media_items": (
                                 [
                                     smi.model_dump()
-                                    for smi in request_dto.source_media_items
+                                    for smi in source_media_items_list
                                 ]
-                                if request_dto.source_media_items
+                                if source_media_items_list
                                 else None
                             ),
                             "mime_type": mime_type,
@@ -1131,8 +1397,14 @@ def _process_upload_upscale_in_background(
                         try:
                             ws = await workspace_repo.get_by_id(workspace_id)
                             if ws:
-                                target_project_id = ws.gcp_project_id
-                                target_bucket_name = ws.gcs_bucket_name
+                                if isinstance(
+                                    getattr(ws, "gcp_project_id", None), str
+                                ):
+                                    target_project_id = ws.gcp_project_id
+                                if isinstance(
+                                    getattr(ws, "gcs_bucket_name", None), str
+                                ):
+                                    target_bucket_name = ws.gcs_bucket_name
                         except Exception as e:
                             worker_logger.warning(
                                 "Could not fetch workspace config: %s", e
@@ -1227,8 +1499,6 @@ def _process_upload_upscale_in_background(
                                     f"not found",
                                 )
 
-                            # Use the first original URI if available, else the
-                            # first generation URI
                             if existing_media.original_gcs_uris:
                                 final_original_uri = (
                                     existing_media.original_gcs_uris[0]
@@ -1248,18 +1518,15 @@ def _process_upload_upscale_in_background(
                             )
 
                         if not final_upscaled_uri:
-                            # Only upscale if we haven't already done it via
-                            # upload_asset
-                            # And only if upscale_factor is provided
                             if upscale_factor:
-                                preview_model = (
-                                    GenerationModelEnum.IMAGEN_4_UPSCALE_PREVIEW
+                                upscale_model = (
+                                    GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE
                                 )
                                 upscale_dto = UpscaleImagenDto(
                                     user_image=final_original_uri,
                                     upscale_factor=upscale_factor,
                                     mime_type=MimeTypeEnum.IMAGE_PNG,
-                                    generation_model=preview_model,
+                                    generation_model=upscale_model,
                                     enhance_input_image=enhance_input_image
                                     or False,
                                     image_preservation_factor=(
@@ -1286,8 +1553,6 @@ def _process_upload_upscale_in_background(
                                         "Upscaling returned no URI"
                                     )
                             else:
-                                # No upscale requested, use original as the
-                                # result
                                 final_upscaled_uri = final_original_uri
 
                         # --- Finalize ---
@@ -1389,7 +1654,6 @@ class ImagenService:
         workspace_id: int,
         gcs_uri: str,
         mime_type: str,
-        # original_filename is removed
         scope: AssetScopeEnum | None = None,
         file_bytes: bytes | None = None,
         filename: str | None = None,
@@ -1401,31 +1665,7 @@ class ImagenService:
         enhance_input_image: bool | None = None,
         image_preservation_factor: float | None = None,
     ) -> MediaItemResponse:
-        """Starts a background job to upload and/or upscale an image.
-
-        Args:
-            user: The current user.
-            executor: ThreadPoolExecutor for background tasks.
-            workspace_id: The ID of the workspace.
-            gcs_uri: The GCS URI of the image if it's already in GCS.
-            mime_type: The MIME type of the image.
-            # original_filename is removed
-            scope: The scope of the asset (e.g., WORKSPACE, USER).
-            file_bytes: The bytes of the file if it's a new upload.
-            filename: The filename for a new upload.
-            source_asset_id: The ID of an existing source asset to upscale.
-            media_item_id_existing: The ID of an existing media item to upscale.
-            upscale_factor: The factor to upscale the image by (e.g., "x2", "x4").
-            aspect_ratio: The aspect ratio of the image.
-            asset_type: The type of asset (e.g., IMAGE).
-            enhance_input_image: Whether to enhance the input image before upscaling.
-            image_preservation_factor: Factor for image preservation during upscaling.
-
-        Returns:
-            A MediaItemResponse representing the placeholder item.
-        """
-
-        # --- Validation for Existing Assets (Sync Check) ---
+        """Starts a background job to upload and/or upscale an image."""
         target_gcs_uri = None
         if not file_bytes:
             if source_asset_id:
@@ -1444,28 +1684,21 @@ class ImagenService:
                     ) from exc
 
             elif media_item_id_existing:
-                # It's an existing MediaItem
                 media = await self.media_repo.get_by_id(media_item_id_existing)
                 if not media:
                     raise ValueError(
                         f"Media item {media_item_id_existing} not found"
                     )
-                # We don't strictly need the URI here as the worker
-                # will fetch it,
-                # but good to validate existence.
                 target_gcs_uri = media.gcs_uris[0] if media.gcs_uris else None
 
         if target_gcs_uri and not file_bytes:
-            # Download bytes for validation to ensure error feedback
             image_bytes = self.gcs_service.download_bytes_from_gcs(
                 target_gcs_uri
             )
             if image_bytes:
                 try:
                     pil_image = PILImage.open(io.BytesIO(image_bytes))
-                    max_output_pixels = (
-                        40000000  # ~40MP limit for Imagen 4 Upscale
-                    )
+                    max_output_pixels = 40000000
 
                     current_pixels = pil_image.width * pil_image.height
                     factor_int = 2
@@ -1491,18 +1724,18 @@ class ImagenService:
                     raise
                 except Exception as e:
                     logger.warning(
-                        "Failed to validate existing image resolution for user %s: %s",
+                        "Failed to validate existing image resolution for "
+                        "user %s: %s",
                         user.email,
                         e,
                     )
 
-        # 1. Create Placeholder
         placeholder_item = MediaItemModel(
             workspace_id=workspace_id,
             user_email=user.email,
             user_id=user.id,
             mime_type=MimeTypeEnum.IMAGE_PNG,
-            model=GenerationModelEnum.IMAGEN_4_UPSCALE_PREVIEW,
+            model=GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE,
             status=JobStatusEnum.PROCESSING,
             aspect_ratio=aspect_ratio or AspectRatioEnum.RATIO_1_1,
             gcs_uris=[],
@@ -1511,11 +1744,9 @@ class ImagenService:
             original_prompt="Upscale Job",
         )
 
-        # Use the returned item which includes the DB-generated ID
         created_item = await self.media_repo.create(placeholder_item)
         media_item_id = created_item.id
 
-        # 3. Submit to Executor
         executor.submit(
             _process_upload_upscale_in_background,
             media_item_id=media_item_id,
@@ -1525,7 +1756,6 @@ class ImagenService:
             file_bytes=file_bytes,
             filename=filename,
             upscale_factor=upscale_factor,
-            # original_filename=original_filename,
             aspect_ratio=aspect_ratio,
             asset_type=asset_type,
             source_asset_id=source_asset_id,
@@ -1542,7 +1772,7 @@ class ImagenService:
                 "json_fields": {
                     "media_id": placeholder_item.id,
                     "user_email": user.email,
-                    "model": GenerationModelEnum.IMAGEN_4_UPSCALE_PREVIEW.value,
+                    "model": GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE.value,
                 },
             },
         )
@@ -1709,61 +1939,204 @@ class ImagenService:
         self,
         request_dto: UpscaleImagenDto,
     ) -> ImageGenerationResult | None:
-        """Upscale an image."""
-        client = GenAIModelSetup.init()
-        try:
-            # --- Step 1: Perform the Upscale API Call ---
-            image_for_api = types.Image(gcs_uri=request_dto.user_image)
+        """Upscale an image using Nano Banana 2 (Gemini 3.1 Flash Image)."""
+        import base64
 
-            response = client.models.upscale_image(
-                model=GenerationModelEnum.IMAGEN_4_UPSCALE_PREVIEW.value,
-                image=image_for_api,
-                upscale_factor=request_dto.upscale_factor,
-                config=types.UpscaleImageConfig(
-                    include_rai_reason=request_dto.include_rai_reason,
-                    output_mime_type=MimeTypeEnum.IMAGE_PNG.value,
-                    person_generation="allow_all",
-                    enhance_input_image=request_dto.enhance_input_image,
-                    image_preservation_factor=(
-                        request_dto.image_preservation_factor
-                    ),
-                ),
+        try:
+            orig_bytes: bytes | None = None
+            mime_type_str = (
+                request_dto.mime_type.value
+                if hasattr(request_dto.mime_type, "value")
+                else request_dto.mime_type
             )
 
-            # --- Step 2: Process the response and save to GCS ---
-            first_image = (
-                response.generated_images[0]
-                if response.generated_images
+            if request_dto.user_image.startswith(
+                "gs://"
+            ) or request_dto.user_image.startswith("http"):
+                image_for_api = types.Image(
+                    gcs_uri=request_dto.user_image,
+                    mime_type=mime_type_str,
+                )
+                if request_dto.user_image.startswith("gs://"):
+                    downloaded = self.gcs_service.download_bytes_from_gcs(
+                        request_dto.user_image,
+                    )
+                    if isinstance(downloaded, (bytes, bytearray)):
+                        orig_bytes = bytes(downloaded)
+            else:
+                try:
+                    orig_bytes = base64.b64decode(request_dto.user_image)
+                    image_for_api = types.Image(
+                        image_bytes=orig_bytes,
+                        mime_type=mime_type_str,
+                    )
+                except Exception:
+                    image_for_api = types.Image(
+                        gcs_uri=request_dto.user_image,
+                        mime_type=mime_type_str,
+                    )
+
+            orig_w, orig_h = None, None
+            if orig_bytes:
+                try:
+                    with PILImage.open(io.BytesIO(orig_bytes)) as orig_pil:
+                        orig_w, orig_h = orig_pil.size
+                except Exception as dim_err:
+                    logger.warning(
+                        "Could not read input image dimensions: %s", dim_err
+                    )
+
+            factor_map = {"x2": 2, "x3": 3, "x4": 4}
+            factor = factor_map.get(request_dto.upscale_factor or "x2", 2)
+
+            target_w, target_h = None, None
+            if orig_w and orig_h:
+                raw_target_w = orig_w * factor
+                raw_target_h = orig_h * factor
+                max_4k_dim = 4096
+                if max(raw_target_w, raw_target_h) > max_4k_dim:
+                    scale = max_4k_dim / max(raw_target_w, raw_target_h)
+                    target_w = max(1, round(raw_target_w * scale))
+                    target_h = max(1, round(raw_target_h * scale))
+                else:
+                    target_w = raw_target_w
+                    target_h = raw_target_h
+
+            resolution = (
+                "4K"
+                if (target_w and target_h and max(target_w, target_h) > 2048)
+                or request_dto.upscale_factor in ("x3", "x4")
+                else "2K"
+            )
+            prompt_parts = [
+                "Upscale and enhance this image to ultra-high resolution."
+            ]
+
+            if request_dto.enhance_input_image:
+                prompt_parts.append(
+                    "Apply active enhancement: aggressively suppress noise, "
+                    "eliminate JPEG and compression artifacts, deblur, and "
+                    "clean up compression distortions while restoring sharp "
+                    "clarity."
+                )
+
+            if request_dto.image_preservation_factor is not None:
+                preservation = request_dto.image_preservation_factor
+                if preservation >= 0.75:
+                    prompt_parts.append(
+                        f"Image preservation factor is {preservation:.2f} "
+                        "(strict preservation): Strictly and faithfully "
+                        "preserve the exact pixel structure, composition, "
+                        "colors, lighting, subjects, textures, background, "
+                        "and text with minimal deviation from the original "
+                        "image."
+                    )
+                elif preservation >= 0.4:
+                    prompt_parts.append(
+                        f"Image preservation factor is {preservation:.2f} "
+                        "(balanced preservation): Maintain high fidelity to "
+                        "the original composition, colors, and subject matter "
+                        "while rendering enhanced high-frequency details and "
+                        "clarity."
+                    )
+                else:
+                    prompt_parts.append(
+                        f"Image preservation factor is {preservation:.2f} "
+                        "(creative detail generation): Prioritize "
+                        "synthesizing rich, crisp, and high-frequency "
+                        "textures and details while respecting the general "
+                        "structure and subject of the original image."
+                    )
+            else:
+                prompt_parts.append(
+                    "Faithfully preserve the exact composition, colors, "
+                    "lighting, subjects, background, and text from the "
+                    "original image while increasing sharpness, removing "
+                    "noise and compression artifacts, and rendering crisp "
+                    "high-frequency details."
+                )
+
+            upscale_prompt = " ".join(prompt_parts)
+
+            project_id = (
+                self.gcs_service.project_id
+                if isinstance(
+                    getattr(self.gcs_service, "project_id", None), str
+                )
                 else None
+            )
+            global_client = GenAIModelSetup.get_global_client(
+                project_id=project_id
+            )
+            generated_image_tuple = await asyncio.to_thread(
+                gemini_generate_image,
+                gcs_service=self.gcs_service,
+                vertexai_client=global_client,
+                prompt=upscale_prompt,
+                model=request_dto.generation_model,
+                bucket_name=self.gcs_service.bucket_name,
+                reference_images=[image_for_api],
+                resolution=resolution,
+            )
+
+            generated_image = (
+                generated_image_tuple[0]
+                if isinstance(generated_image_tuple, tuple)
+                else generated_image_tuple
             )
 
             if (
-                first_image
-                and first_image.image
-                and first_image.image.image_bytes
+                generated_image
+                and generated_image.image
+                and generated_image.image.gcs_uri
             ):
-                upscaled_bytes = first_image.image.image_bytes
-                # Create a unique filename for the upscaled image.
-                original_filename = os.path.basename(
-                    request_dto.user_image.split("?")[0],
-                )
-                upscaled_blob_name = (
-                    f"upscaled_images/upscaled_"
-                    f"{request_dto.upscale_factor}_{original_filename}"
-                )
+                final_gcs_uri = generated_image.image.gcs_uri
 
-                final_gcs_uri = self.gcs_service.upload_bytes_to_gcs(
-                    upscaled_bytes,
-                    upscaled_blob_name,
-                    MimeTypeEnum.IMAGE_PNG,
-                )
-
-                if not final_gcs_uri:
-                    raise ValueError("Failed to upload upscaled image to GCS.")
+                if target_w and target_h:
+                    gen_bytes = self.gcs_service.download_bytes_from_gcs(
+                        final_gcs_uri,
+                    )
+                    if isinstance(gen_bytes, (bytes, bytearray)) and gen_bytes:
+                        try:
+                            with PILImage.open(
+                                io.BytesIO(gen_bytes)
+                            ) as gen_pil:
+                                if gen_pil.size != (target_w, target_h):
+                                    if gen_pil.mode not in ("RGB", "RGBA"):
+                                        gen_pil = gen_pil.convert("RGB")
+                                    resized_pil = gen_pil.resize(
+                                        (target_w, target_h),
+                                        PILImage.Resampling.LANCZOS,
+                                    )
+                                    out_io = io.BytesIO()
+                                    resized_pil.save(out_io, format="PNG")
+                                    file_name = (
+                                        f"upscaled_"
+                                        f"{request_dto.upscale_factor}_"
+                                        f"{uuid.uuid4().hex[:8]}.png"
+                                    )
+                                    stored_uri = self.gcs_service.store_to_gcs(
+                                        folder="upscaled_images",
+                                        file_name=file_name,
+                                        mime_type=MimeTypeEnum.IMAGE_PNG,
+                                        contents=out_io.getvalue(),
+                                        bucket_name=(
+                                            self.gcs_service.bucket_name
+                                        ),
+                                        decode=False,
+                                    )
+                                    if stored_uri:
+                                        final_gcs_uri = stored_uri
+                        except Exception as resize_err:
+                            logger.warning(
+                                "Failed to resize upscaled image to target "
+                                "dimensions: %s",
+                                resize_err,
+                            )
 
                 return ImageGenerationResult(
-                    enhanced_prompt="",
-                    rai_filtered_reason=first_image.rai_filtered_reason or "",
+                    enhanced_prompt=upscale_prompt,
+                    rai_filtered_reason="",
                     image=CustomImagenResult(
                         gcs_uri=final_gcs_uri,
                         encoded_image="",
@@ -1771,15 +2144,8 @@ class ImagenService:
                         presigned_url="",
                     ),
                 )
-            if first_image and first_image.rai_filtered_reason:
-                error_msg = (
-                    f"Image upscaling filtered by RAI: "
-                    f"{first_image.rai_filtered_reason}"
-                )
-                logger.warning(error_msg)
-                raise ValueError(error_msg)
             raise ValueError(
-                "Image upscaling generation failed or returned no data.",
+                "Image upscaling generation failed or returned no data."
             )
 
         except Exception as e:

@@ -19,6 +19,7 @@ from pydantic import Field, field_validator, model_validator
 
 from src.common.base_dto import (
     AspectRatioEnum,
+    AssetReferenceDto,
     BaseDto,
     ColorAndToneEnum,
     CompositionEnum,
@@ -26,6 +27,7 @@ from src.common.base_dto import (
     LightingEnum,
     StyleEnum,
 )
+from src.common.media_utils import extract_youtube_video_id
 from src.common.schema.media_item_model import SourceMediaItemLink
 
 
@@ -92,6 +94,14 @@ class CreateImagenDto(BaseDto):
         default=None,
         description="A list of previously generated media items (from the gallery) to be used as inputs for the new generation.",
     )
+    reference_video: AssetReferenceDto | None = Field(
+        default=None,
+        description="Optional reference video (SourceAsset or MediaItem) for Gemini image models.",
+    )
+    external_url: str | None = Field(
+        default=None,
+        description="Optional YouTube video URL used as a reference input for Gemini image models.",
+    )
     use_brand_guidelines: bool = Field(
         default=False,
         description="Whether to prepend brand guidelines to the prompt.",
@@ -122,19 +132,32 @@ class CreateImagenDto(BaseDto):
     )
 
     @field_validator("prompt")
+    @classmethod
     def prompt_must_not_be_empty(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Prompt cannot be empty or whitespace only")
         return value
 
+    @field_validator("external_url")
+    @classmethod
+    def validate_youtube_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        if not extract_youtube_video_id(cleaned):
+            raise ValueError("external_url must be a valid YouTube video URL.")
+        return cleaned
+
     @field_validator("generation_model")
+    @classmethod
     def validate_imagen_generation_model(
         cls,
         value: GenerationModelEnum,
     ) -> GenerationModelEnum:
         """Ensures that only supported generation models for imagen are used."""
         valid_generation_models = [
-            GenerationModelEnum.IMAGEN_4_UPSCALE_PREVIEW,
             GenerationModelEnum.GEMINI_2_5_FLASH_IMAGE_PREVIEW,
             GenerationModelEnum.GEMINI_2_5_FLASH_IMAGE,
             GenerationModelEnum.GEMINI_3_PRO_IMAGE_PREVIEW,
@@ -150,27 +173,47 @@ class CreateImagenDto(BaseDto):
     @model_validator(mode="after")
     def validate_inputs(self) -> "CreateImagenDto":
         """Validates the total number of inputs and model compatibility.
-        - The total number of inputs (source_asset_ids + source_media_items) cannot exceed 14 for Gemini 3 Pro.
-        - For non-Gemini models, only one input is allowed, and the model must support editing.
-        - Aspect ratio validation based on model.
+        - The total number of inputs (images + video references) cannot exceed model limits.
+        - Aspect ratio 'auto' requires a Gemini image model and at least one reference input.
         """
+        if self.reference_video is not None and self.external_url is not None:
+            raise ValueError(
+                "Cannot provide both 'reference_video' and 'external_url' simultaneously."
+            )
+
         source_assets_count = (
             len(self.source_asset_ids) if self.source_asset_ids else 0
         )
         generated_inputs_count = (
             len(self.source_media_items) if self.source_media_items else 0
         )
-        total_inputs = source_assets_count + generated_inputs_count
+        video_inputs_count = (1 if self.reference_video is not None else 0) + (
+            1 if self.external_url is not None else 0
+        )
+        total_inputs = (
+            source_assets_count + generated_inputs_count + video_inputs_count
+        )
         model = self.generation_model
 
+        if video_inputs_count > 0 and not model.is_gemini_image_model:
+            raise ValueError(
+                f"Model '{model.value}' does not support video references."
+            )
+
         # Aspect Ratio Validation
-        if self.aspect_ratio not in model.valid_aspect_ratios:
+        if self.aspect_ratio == AspectRatioEnum.AUTO:
+            if not model.is_gemini_image_model or total_inputs == 0:
+                raise ValueError(
+                    "Aspect ratio 'auto' is only supported for Gemini image "
+                    "models when reference inputs are provided.",
+                )
+        elif self.aspect_ratio not in model.valid_aspect_ratios:
             raise ValueError(
                 f"Aspect ratio {self.aspect_ratio} is not supported for model {model.value}.",
             )
 
         if total_inputs == 0:
-            return self  # No inputs, nothing to validate here.
+            return self  # No inputs, nothing further to validate here.
 
         # Input Count Validation
         max_inputs = model.max_total_inputs

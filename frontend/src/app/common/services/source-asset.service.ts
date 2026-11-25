@@ -211,6 +211,20 @@ export class SourceAssetService {
       formData.append('upscaleFactor', options.upscaleFactor);
     }
 
+    if (options.enhance_input_image !== undefined) {
+      formData.append('enhanceInputImage', String(options.enhance_input_image));
+    }
+
+    if (
+      options.image_preservation_factor !== undefined &&
+      options.image_preservation_factor !== null
+    ) {
+      formData.append(
+        'imagePreservationFactor',
+        String(options.image_preservation_factor),
+      );
+    }
+
     return this.http
       .post<MediaItem>(
         `${environment.backendURL}/images/upload-upscale`,
@@ -232,7 +246,14 @@ export class SourceAssetService {
   ): Observable<MediaItem> {
     const formData = new FormData();
 
-    formData.append('id', String(asset.id));
+    if (
+      (asset as any).itemType === 'media_item' ||
+      (asset as any).isMediaItem
+    ) {
+      formData.append('mediaItemId', String(asset.id));
+    } else {
+      formData.append('id', String(asset.id));
+    }
     formData.append('gcsUri', asset.gcsUri);
     formData.append('originalFilename', asset.originalFilename);
     formData.append('mimeType', asset.mimeType);

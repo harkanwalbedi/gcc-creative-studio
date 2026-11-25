@@ -29,8 +29,20 @@ import {
   inject,
 } from '@angular/core';
 import {MatSnackBar} from '@angular/material/snack-bar';
-import {ReferenceImage, ReferenceVideo} from '../../models/search.model';
-import {GenerationModelConfig} from '../../config/model-config';
+import {
+  KeyframeSlot,
+  ReferenceImage,
+  ReferenceVideo,
+} from '../../models/search.model';
+import {
+  ASPECT_RATIO_AUTO,
+  GenerationModelConfig,
+  getSupportedModelDurations,
+} from '../../config/model-config';
+import {
+  extractYouTubeVideoId,
+  getYouTubeThumbnailUrl,
+} from '../../../utils/youtube.utils';
 import {MatIconModule} from '@angular/material/icon';
 import {CommonModule} from '@angular/common';
 import {FormsModule} from '@angular/forms';
@@ -77,6 +89,7 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
     this._generationModels = val || [];
     this.generationModelsSignal.set(val || []);
     this.updateSupportedResolutions();
+    this.syncSelectedDuration();
   }
   get generationModels(): GenerationModelConfig[] {
     return this._generationModels;
@@ -87,6 +100,7 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
     this._selectedGenerationModel = val;
     this.selectedGenerationModelSignal.set(val);
     this.updateSupportedResolutions();
+    this.syncSelectedDuration();
   }
   get selectedGenerationModel(): string {
     return this._selectedGenerationModel;
@@ -100,6 +114,7 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
         undefined,
         oldMode !== '' && oldMode !== val,
       );
+      this.syncSelectedDuration();
     }
   }
   get mode(): string {
@@ -112,6 +127,7 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
     if (val) {
       const normalized = val === '720p' ? '1K' : val === '1080p' ? '2K' : val;
       this.selectedResolution.set(normalized as '360p' | '1K' | '2K' | '4K');
+      this.syncSelectedDuration();
     }
   }
   @Input() set duration(val: number | undefined) {
@@ -150,20 +166,118 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
   @Output() clearReferenceVideo = new EventEmitter<
     {index: number; event: Event} | Event
   >();
+  @Output() openVideoUrlInputForReference = new EventEmitter<void>();
+  @Output() clearExternalUrl = new EventEmitter<void>();
   @Output() openVideoSelectorForEdit = new EventEmitter<void>();
   @Output() clearEditSource = new EventEmitter<Event>();
+  @Output() openVideoSelectorForMask = new EventEmitter<void>();
+  @Output() clearMaskSource = new EventEmitter<Event>();
   @Output() stripSourceAudioChanged = new EventEmitter<boolean>();
   @Output() resetClicked = new EventEmitter<void>();
   @Output() openAudioSelectorForReference = new EventEmitter<void>();
   @Output() clearReferenceAudio = new EventEmitter<Event>();
   @Output() temperatureChanged = new EventEmitter<number | null>();
+  @Output() transformStrengthChanged = new EventEmitter<number>();
+  @Output() seedChanged = new EventEmitter<number | null>();
+  @Output() numDiffusionStepsChanged = new EventEmitter<number>();
+  @Output() addKeyframeClicked = new EventEmitter<void>();
+  @Output() removeKeyframeClicked = new EventEmitter<number>();
+  @Output() keyframeFrameNumberChanged = new EventEmitter<{
+    index: number;
+    frameNumber: number;
+  }>();
+  @Output() outputCodecChanged = new EventEmitter<
+    'h264' | 'prores' | 'dnxhr'
+  >();
+  @Output() compressionQualityChanged = new EventEmitter<
+    'optimized' | 'lossless'
+  >();
+  @Output() audioControlModeChanged = new EventEmitter<
+    | 'generate'
+    | 'preserve_video_audio'
+    | 'target_audio'
+    | 'reference_audio'
+    | null
+  >();
+  @Output() isBlueMeshInputChanged = new EventEmitter<boolean>();
+  @Output() seamlessLoopChanged = new EventEmitter<boolean>();
+  @Output() tessellateHorizontalChanged = new EventEmitter<boolean>();
+  @Output() tessellateVerticalChanged = new EventEmitter<boolean>();
+
+  readonly validFrameNumbers: number[] = [
+    8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144,
+    152, 160, 168, 176, 184,
+  ];
+
+  readonly deliveryFormatOptions: {
+    key: string;
+    label: string;
+    codec: 'h264' | 'prores' | 'dnxhr';
+    quality: 'optimized' | 'lossless';
+  }[] = [
+    {
+      key: 'h264_optimized',
+      label: 'Web MP4 (H.264)',
+      codec: 'h264',
+      quality: 'optimized',
+    },
+    {
+      key: 'prores_optimized',
+      label: 'Apple ProRes 422 (.mov)',
+      codec: 'prores',
+      quality: 'optimized',
+    },
+    {
+      key: 'prores_lossless',
+      label: 'Apple ProRes 4444 Lossless (.mov)',
+      codec: 'prores',
+      quality: 'lossless',
+    },
+    {
+      key: 'dnxhr_optimized',
+      label: 'Avid DNxHR HQ (.mxf)',
+      codec: 'dnxhr',
+      quality: 'optimized',
+    },
+  ];
 
   @Input() image1Preview: string | null = null;
-  @Input() image2Preview: string | null = null;
-  @Input() referenceImages: ReferenceImage[] = [];
+  private _image2Preview: string | null = null;
+  private image2PreviewSignal = signal<string | null>(null);
+  @Input() set image2Preview(val: string | null) {
+    this._image2Preview = val ?? null;
+    this.image2PreviewSignal.set(val ?? null);
+    this.syncSelectedDuration();
+  }
+  get image2Preview(): string | null {
+    return this._image2Preview;
+  }
+
+  @Input() conditioningKeyframes: KeyframeSlot[] = [];
+  private _referenceImages: ReferenceImage[] = [];
+  private referenceImagesSignal = signal<ReferenceImage[]>([]);
+  @Input() set referenceImages(val: ReferenceImage[]) {
+    this._referenceImages = val || [];
+    this.referenceImagesSignal.set(val || []);
+    this.syncSelectedDuration();
+  }
+  get referenceImages(): ReferenceImage[] {
+    return this._referenceImages;
+  }
+
   @Input() referenceImagesType: 'ASSET' | 'STYLE' = 'ASSET';
   @Input() referenceVideo: any | null = null;
   @Input() referenceVideos: any[] = [];
+
+  private _externalUrl: string | null = null;
+  private externalUrlSignal = signal<string | null>(null);
+  @Input() set externalUrl(val: string | null) {
+    this._externalUrl = val ?? null;
+    this.externalUrlSignal.set(val ?? null);
+  }
+  get externalUrl(): string | null {
+    return this._externalUrl;
+  }
 
   get effectiveReferenceVideos(): any[] {
     if (this.referenceVideos && this.referenceVideos.length > 0) {
@@ -173,10 +287,27 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
   }
   /** The clip being modified in Edit Video mode. */
   @Input() editSource: ReferenceVideo | null = null;
+  /** Optional inpainting mask video for localized edits. */
+  @Input() maskSource: ReferenceVideo | null = null;
   @Input() stripSourceAudio = true;
   @Input() referenceAudio: any | null = null;
   /** null means "use the model's default" rather than a chosen value. */
   @Input() temperature: number | null = null;
+  @Input() transformStrength = 0.5;
+  @Input() seed: number | null = null;
+  @Input() numDiffusionSteps = 20;
+  @Input() outputCodec: 'h264' | 'prores' | 'dnxhr' = 'h264';
+  @Input() compressionQuality: 'optimized' | 'lossless' = 'optimized';
+  @Input() audioControlMode:
+    | 'generate'
+    | 'preserve_video_audio'
+    | 'target_audio'
+    | 'reference_audio'
+    | null = null;
+  @Input() isBlueMeshInput = false;
+  @Input() seamlessLoop = true;
+  @Input() tessellateHorizontal = false;
+  @Input() tessellateVertical = false;
 
   @ViewChild('promptInput') promptInput?: ElementRef<HTMLTextAreaElement>;
   @ViewChild('modeTrigger') modeTrigger!: ElementRef;
@@ -185,6 +316,7 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
   @ViewChild('settingsMenu') settingsMenu!: ElementRef;
 
   private resolutionTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private durationTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private eRef: ElementRef) {}
 
@@ -239,6 +371,37 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
     return resolution;
   }
 
+  getAspectRatioIcon(aspectRatioStr: string): string {
+    const matched = this.aspectRatioOptions.find(
+      opt =>
+        opt.value === aspectRatioStr ||
+        opt.viewValue === aspectRatioStr ||
+        aspectRatioStr.startsWith(opt.value + ' '),
+    );
+    if (matched?.icon) {
+      return matched.icon;
+    }
+    const normalized = (aspectRatioStr || '').toLowerCase();
+    if (normalized.startsWith(ASPECT_RATIO_AUTO)) {
+      return 'hdr_auto';
+    }
+    if (normalized.includes('1:1')) {
+      return 'crop_square';
+    }
+    if (
+      normalized.includes('16:9') ||
+      normalized.includes('4:3') ||
+      normalized.includes('3:2') ||
+      normalized.includes('5:4') ||
+      normalized.includes('21:9') ||
+      normalized.includes('4:1') ||
+      normalized.includes('8:1')
+    ) {
+      return 'crop_landscape';
+    }
+    return 'crop_portrait';
+  }
+
   // --- Logic moved from VideoComponent ---
 
   promptText = signal<string>('');
@@ -247,7 +410,14 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
   isModeMenuOpen = signal<boolean>(false);
   isSettingsMenuOpen = signal<boolean>(false);
   isSettingsDropdownOpen = signal<
-    'aspect' | 'outputs' | 'model' | 'resolution' | 'duration' | null
+    | 'aspect'
+    | 'outputs'
+    | 'model'
+    | 'resolution'
+    | 'duration'
+    | 'deliveryFormat'
+    | 'audioControl'
+    | null
   >(null);
   selectedMode = signal<string>('Text to Video');
   selectedPreset = signal<string>('');
@@ -261,25 +431,44 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
   isIngredientsToImage = computed(
     () => this.selectedMode() === 'Ingredients to Image',
   );
+  isVideoToImage = computed(() => this.selectedMode() === 'Video to Image');
   isTextToVideo = computed(() => this.selectedMode() === 'Text to Video');
   isEditVideo = computed(() => this.selectedMode() === 'Edit Video');
+  youtubeVideoId = computed(() =>
+    extractYouTubeVideoId(this.externalUrlSignal()),
+  );
+  youtubeThumbnailUrl = computed(() =>
+    getYouTubeThumbnailUrl(this.youtubeVideoId()),
+  );
+  availableDurations = computed(() =>
+    getSupportedModelDurations(
+      this.getSelectedModelObject(),
+      this.selectedMode(),
+      this.selectedResolution(),
+      !!this.image2PreviewSignal(),
+      this.referenceImagesSignal().length > 0,
+    ),
+  );
   hasResolutionOptions = computed(() => this.supportedResolutions().length > 0);
   hasDurationOptions = computed(
     () =>
       this.selectedMode() !== 'Edit Video' &&
-      (this.getSelectedModelObject()?.capabilities?.supportedDurations ?? [])
-        .length > 0,
+      this.availableDurations().length > 0,
   );
   hasAspectRatioOptions = computed(() => this.selectedMode() !== 'Edit Video');
 
   // --- Lifecycle Hooks ---
   ngOnInit(): void {
     this.updateSupportedResolutions();
+    this.syncSelectedDuration();
   }
 
   ngOnDestroy(): void {
     if (this.resolutionTimeoutId) {
       clearTimeout(this.resolutionTimeoutId);
+    }
+    if (this.durationTimeoutId) {
+      clearTimeout(this.durationTimeoutId);
     }
   }
 
@@ -298,7 +487,11 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
       this.image1Preview ||
       this.image2Preview ||
       this.referenceVideo ||
-      this.editSource
+      this.referenceVideos.length ||
+      this.externalUrl ||
+      this.editSource ||
+      this.maskSource ||
+      this.conditioningKeyframes.length
     );
   }
 
@@ -314,6 +507,198 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
   get supportsFramePlusReferences(): boolean {
     return !!this.getSelectedModelObject()?.capabilities
       ?.supportsFrameWithReferences;
+  }
+
+  get supportsTransformStrength(): boolean {
+    return !!this.getSelectedModelObject()?.capabilities
+      ?.supportsTransformStrength;
+  }
+
+  get supportsDiffusionSteps(): boolean {
+    return !!this.getSelectedModelObject()?.capabilities
+      ?.supportsDiffusionSteps;
+  }
+
+  get supportsSeed(): boolean {
+    return !!this.getSelectedModelObject()?.capabilities?.supportsSeed;
+  }
+
+  get supportsSeamlessLoop(): boolean {
+    return !!this.getSelectedModelObject()?.capabilities?.supportsSeamlessLoop;
+  }
+
+  get supportsPerformanceControl(): boolean {
+    return !!this.getSelectedModelObject()?.capabilities
+      ?.supportsPerformanceControl;
+  }
+
+  get supportsAudioControlMode(): boolean {
+    return !!this.getSelectedModelObject()?.capabilities
+      ?.supportsAudioControlMode;
+  }
+
+  get supportsProFormats(): boolean {
+    return !!this.getSelectedModelObject()?.capabilities?.supportsProFormats;
+  }
+
+  get proFormatBadgeLabel(): string | null {
+    if (!this.supportsProFormats || this.outputCodec === 'h264') {
+      return null;
+    }
+    if (this.outputCodec === 'prores') {
+      return this.compressionQuality === 'lossless' ? 'ProRes 4444' : 'ProRes';
+    }
+    if (this.outputCodec === 'dnxhr') {
+      return 'DNxHR';
+    }
+    return null;
+  }
+
+  get selectedDeliveryFormatLabel(): string {
+    const matched = this.deliveryFormatOptions.find(
+      opt =>
+        opt.codec === this.outputCodec &&
+        opt.quality === this.compressionQuality,
+    );
+    if (matched) {
+      return matched.label;
+    }
+    if (this.outputCodec === 'prores') {
+      return 'Apple ProRes 422 (.mov)';
+    }
+    if (this.outputCodec === 'dnxhr') {
+      return 'Avid DNxHR HQ (.mxf)';
+    }
+    return 'Web MP4 (H.264)';
+  }
+
+  get availableAudioControlOptions(): {
+    value:
+      | 'generate'
+      | 'preserve_video_audio'
+      | 'target_audio'
+      | 'reference_audio';
+    label: string;
+  }[] {
+    const options: {
+      value:
+        | 'generate'
+        | 'preserve_video_audio'
+        | 'target_audio'
+        | 'reference_audio';
+      label: string;
+    }[] = [
+      {value: 'generate', label: 'Generate Audio'},
+      {value: 'preserve_video_audio', label: 'Preserve Video Audio'},
+      {value: 'target_audio', label: 'Sync Target Audio (Lip-Sync / Dub)'},
+    ];
+    if (this.getSelectedModelObject()?.value === 'omni-cine') {
+      options.push({value: 'reference_audio', label: 'Voice/Sound Reference'});
+    }
+    return options;
+  }
+
+  get selectedAudioControlLabel(): string {
+    const current = this.audioControlMode ?? 'generate';
+    return (
+      this.availableAudioControlOptions.find(opt => opt.value === current)
+        ?.label ?? 'Generate Audio'
+    );
+  }
+
+  get showAudioReferenceSlot(): boolean {
+    if (!this.getSelectedModelObject()?.capabilities?.supportsAudioReference) {
+      return false;
+    }
+    if (this.mode === 'Ingredients to Video') {
+      return true;
+    }
+    return (
+      this.supportsAudioControlMode &&
+      (this.audioControlMode === 'target_audio' ||
+        this.audioControlMode === 'reference_audio')
+    );
+  }
+
+  selectDeliveryFormat(option: {
+    codec: 'h264' | 'prores' | 'dnxhr';
+    quality: 'optimized' | 'lossless';
+  }): void {
+    this.outputCodec = option.codec;
+    this.compressionQuality = option.quality;
+    this.outputCodecChanged.emit(option.codec);
+    this.compressionQualityChanged.emit(option.quality);
+    this.isSettingsDropdownOpen.set(null);
+  }
+
+  selectAudioControlMode(
+    value:
+      | 'generate'
+      | 'preserve_video_audio'
+      | 'target_audio'
+      | 'reference_audio',
+  ): void {
+    this.audioControlMode = value;
+    this.audioControlModeChanged.emit(value);
+    this.isSettingsDropdownOpen.set(null);
+  }
+
+  onBlueMeshInputToggle(event: Event): void {
+    const checked = (event.target as HTMLInputElement).checked;
+    this.isBlueMeshInput = checked;
+    this.isBlueMeshInputChanged.emit(checked);
+  }
+
+  onSeamlessLoopToggle(event: Event): void {
+    const checked = (event.target as HTMLInputElement).checked;
+    this.seamlessLoop = checked;
+    this.seamlessLoopChanged.emit(checked);
+  }
+
+  onTessellateHorizontalToggle(event: Event): void {
+    const checked = (event.target as HTMLInputElement).checked;
+    this.tessellateHorizontal = checked;
+    this.tessellateHorizontalChanged.emit(checked);
+  }
+
+  onTessellateVerticalToggle(event: Event): void {
+    const checked = (event.target as HTMLInputElement).checked;
+    this.tessellateVertical = checked;
+    this.tessellateVerticalChanged.emit(checked);
+  }
+
+  onTransformStrengthInput(event: Event) {
+    const val = parseFloat((event.target as HTMLInputElement).value);
+    this.transformStrength = val;
+    this.transformStrengthChanged.emit(val);
+  }
+
+  onNumDiffusionStepsInput(event: Event) {
+    const val = parseInt((event.target as HTMLInputElement).value, 10);
+    if (!isNaN(val)) {
+      this.numDiffusionSteps = val;
+      this.numDiffusionStepsChanged.emit(val);
+    }
+  }
+
+  onSeedInput(event: Event) {
+    const raw = (event.target as HTMLInputElement).value.trim();
+    if (!raw) {
+      this.seed = null;
+      this.seedChanged.emit(null);
+      return;
+    }
+    const val = parseInt(raw, 10);
+    if (!isNaN(val) && val >= 0) {
+      this.seed = val;
+      this.seedChanged.emit(val);
+    }
+  }
+
+  randomizeSeed() {
+    const randomVal = Math.floor(Math.random() * 2147483647);
+    this.seed = randomVal;
+    this.seedChanged.emit(randomVal);
   }
 
   /**
@@ -447,9 +832,13 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
       oldMode !== '' && oldMode !== mode,
     );
 
-    if (!this.isTextToVideo()) {
-      const longest = this.getSelectedModelDurations().at(-1);
-      if (longest) this.selectDuration(longest);
+    const supportedDurations = this.getSelectedModelDurations();
+    if (
+      supportedDurations.length > 0 &&
+      !supportedDurations.includes(this.selectedDuration())
+    ) {
+      const fallback = supportedDurations[supportedDurations.length - 1];
+      this.selectDuration(fallback);
     }
   }
 
@@ -460,9 +849,13 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
     this.resolutionChanged.emit(resolution);
     this.isSettingsDropdownOpen.set(null);
 
-    if (resolution !== '1K' && resolution !== '360p') {
-      const longest = this.getSelectedModelDurations(model).at(-1);
-      if (longest) this.selectDuration(longest);
+    const supportedDurations = this.getSelectedModelDurations(model);
+    if (
+      supportedDurations.length > 0 &&
+      !supportedDurations.includes(this.selectedDuration())
+    ) {
+      const fallback = supportedDurations[supportedDurations.length - 1];
+      this.selectDuration(fallback);
     }
   }
 
@@ -488,6 +881,7 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
     this.modelSelected.emit(model);
 
     this.updateSupportedResolutions(model);
+    this.syncSelectedDuration(model);
   }
 
   selectPreset(preset: string) {
@@ -509,7 +903,7 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
       | '4K'
     )[];
 
-    // Extending a video in Veo drops to the lowest resolution. Omni 1.1 allows all resolutions.
+    // Extending a video in Veo drops to the lowest resolution. Omni 1.1+ allows all resolutions.
     if (
       this.isExtendVideo() &&
       !activeModel?.value?.startsWith('gemini-omni')
@@ -522,23 +916,31 @@ export class FlowPromptBoxComponent implements OnInit, OnDestroy {
 
   getSelectedModelDurations(model?: any): number[] {
     const activeModel = model || this.getSelectedModelObject();
-    const all = activeModel?.capabilities?.supportedDurations ?? [];
+    return getSupportedModelDurations(
+      activeModel,
+      this.selectedMode(),
+      this.selectedResolution(),
+      !!this.image2PreviewSignal(),
+      this.referenceImagesSignal().length > 0,
+    );
+  }
 
-    // Veo only offers shorter lengths in text-to-video, and only at 1K;
-    // everywhere else it is pinned to the longest. That is a Veo constraint,
-    // not a universal one - applying it to every model left Gemini Omni
-    // stuck at 10s in every mode except text-to-video, even though it accepts
-    // its full 3-10s range regardless of mode.
-    if (!activeModel?.capabilities?.restrictsDurationOutsideTextToVideo) {
-      return all;
+  private syncSelectedDuration(model?: GenerationModelConfig): void {
+    const supported = this.getSelectedModelDurations(model);
+    if (supported.length > 0 && !supported.includes(this.selectedDuration())) {
+      const clamped = Math.min(
+        this.selectedDuration(),
+        supported[supported.length - 1],
+      );
+      const fallback = supported.includes(clamped)
+        ? clamped
+        : supported[supported.length - 1];
+      this.selectedDuration.set(fallback);
+      if (this.durationTimeoutId) clearTimeout(this.durationTimeoutId);
+      this.durationTimeoutId = setTimeout(() =>
+        this.durationChanged.emit(fallback),
+      );
     }
-
-    if (!this.isTextToVideo() || this.selectedResolution() !== '1K') {
-      const longest = all.at(-1);
-      return longest ? [longest] : [];
-    }
-
-    return all;
   }
 
   /** Output counts the active model allows, for the x1..xN selector. */

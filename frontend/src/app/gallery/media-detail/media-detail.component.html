@@ -46,11 +46,14 @@
         [showOmniButton]="true"
         [showExtendButton]="true"
         [showConcatenateButton]="true"
+        [showUpscaleButton]="isVpeEnabled"
+        [vpeScreening]="vpeScreening"
         (editClicked)="generateWithThisImage($event)"
         (generateVideoClicked)="generateVideoWithImage($event)"
         (sendToVtoClicked)="sendToVto($event)"
         (extendWithAiClicked)="handleExtendWithAi($event)"
         (concatenateClicked)="handleConcatenate($event)"
+        (upscaleClicked)="handleUpscaleClick($event)"
         (editWithOmniClicked)="handleEditWithOmni($event)"
         (deleteClicked)="deleteCurrentMedia()"
         (tagsChanged)="onTagsChanged($event)"
@@ -125,7 +128,7 @@
   <p class="text-right">{{ mediaItem.duration }}s</p>
 </div>
 
-                <div *ngIf="mediaItem.aspectRatio" class="contents">
+                <div *ngIf="mediaItem?.aspectRatio" class="contents">
                   <strong class="font-semibold text-gray-400">Aspect Ratio:</strong>
                   <p class="text-right">
                     {{ mediaItem.aspectRatio }}
@@ -134,6 +137,38 @@
                 <div *ngIf="mediaItem?.resolution" class="contents">
                   <strong class="font-semibold text-gray-400">Resolution:</strong>
                   <p class="text-right">{{ mediaItem.resolution }}</p>
+                </div>
+                <div *ngIf="$any(mediaItem)?.rawData?.['video_transform_strength'] !== undefined || $any(mediaItem)?.videoTransformStrength !== undefined" class="contents">
+                  <strong class="font-semibold text-gray-400">Transform Strength:</strong>
+                  <p class="text-right font-mono text-blue-400">{{ $any(mediaItem)?.videoTransformStrength ?? $any(mediaItem)?.rawData?.['video_transform_strength'] }}</p>
+                </div>
+                <div *ngIf="$any(mediaItem)?.rawData?.['num_diffusion_steps'] !== undefined || $any(mediaItem)?.numDiffusionSteps !== undefined" class="contents">
+                  <strong class="font-semibold text-gray-400">Diffusion Steps:</strong>
+                  <p class="text-right font-mono">{{ $any(mediaItem)?.numDiffusionSteps ?? $any(mediaItem)?.rawData?.['num_diffusion_steps'] }}</p>
+                </div>
+                <div *ngIf="$any(mediaItem)?.rawData?.['temperature'] !== undefined" class="contents">
+                  <strong class="font-semibold text-gray-400">Temperature:</strong>
+                  <p class="text-right font-mono">{{ $any(mediaItem)?.rawData?.['temperature'] }}</p>
+                </div>
+                <div *ngIf="mediaItem.style" class="contents">
+                  <strong class="font-semibold text-gray-400">Style:</strong>
+                  <p class="text-right">{{ mediaItem.style }}</p>
+                </div>
+                <div *ngIf="mediaItem.lighting" class="contents">
+                  <strong class="font-semibold text-gray-400">Lighting:</strong>
+                  <p class="text-right">{{ mediaItem.lighting }}</p>
+                </div>
+                <div *ngIf="mediaItem.colorAndTone" class="contents">
+                  <strong class="font-semibold text-gray-400">Color & Tone:</strong>
+                  <p class="text-right">{{ mediaItem.colorAndTone }}</p>
+                </div>
+                <div *ngIf="mediaItem.composition" class="contents">
+                  <strong class="font-semibold text-gray-400">Composition:</strong>
+                  <p class="text-right">{{ mediaItem.composition }}</p>
+                </div>
+                <div *ngIf="mediaItem.negativePrompt" class="contents">
+                  <strong class="font-semibold text-gray-400">Negative Prompt:</strong>
+                  <p class="text-right break-words">{{ mediaItem.negativePrompt }}</p>
                 </div>
                 <div *ngIf="mediaItem?.googleSearch !== undefined" class="contents">
                   <strong class="font-semibold text-gray-400">Google Search:</strong>
@@ -235,17 +270,22 @@
                     </ng-container>
                   </a>
                   <!-- From previously generated media -->
-                  <a *ngFor="let source of mediaItem.enrichedSourceMediaItems" [routerLink]="['/gallery', source.mediaItemId]"
-                    [queryParams]="{img_index: source.mediaIndex}" target="_blank" rel="noopener noreferrer"
-                    class="w-20 h-20 rounded-md overflow-hidden hover:opacity-80 transition-opacity cursor-pointer border border-gray-700 bg-neutral-800 flex items-center justify-center">
-                    <ng-container *ngIf="source.mimeType?.startsWith('audio/')">
-                      <mat-icon class="text-white !text-3xl !h-8 !w-8 flex items-center justify-center">graphic_eq</mat-icon>
-                    </ng-container>
-                    <ng-container *ngIf="!source.mimeType?.startsWith('audio/')">
-                      <img [src]="source?.presignedThumbnailUrl || source.presignedUrl" alt="Source Media Item"
-                        class="w-full h-full object-cover" />
-                    </ng-container>
-                  </a>
+                  <div *ngFor="let source of mediaItem.enrichedSourceMediaItems" class="flex flex-col items-center gap-1 w-20">
+                    <a [routerLink]="['/gallery', source.mediaItemId]"
+                      [queryParams]="{img_index: source.mediaIndex}" target="_blank" rel="noopener noreferrer"
+                      class="w-20 h-20 rounded-md overflow-hidden hover:opacity-80 transition-opacity cursor-pointer border border-gray-700 bg-neutral-800 flex items-center justify-center">
+                      <ng-container *ngIf="source.mimeType?.startsWith('audio/')">
+                        <mat-icon class="text-white !text-3xl !h-8 !w-8 flex items-center justify-center">graphic_eq</mat-icon>
+                      </ng-container>
+                      <ng-container *ngIf="!source.mimeType?.startsWith('audio/')">
+                        <img [src]="source?.presignedThumbnailUrl || source.presignedUrl" alt="Source Media Item"
+                          class="w-full h-full object-cover" />
+                      </ng-container>
+                    </a>
+                    <span *ngIf="sourceRoleLabel(source.role)" class="text-[10px] leading-tight text-gray-400 text-center truncate w-full">
+                      {{ sourceRoleLabel(source.role) }}
+                    </span>
+                  </div>
               </div>
               </section>
 
@@ -562,46 +602,48 @@
               </div>
             </section>
 
-            <!-- Storage -->
-            <section class="space-y-3">
-              <h3 class="text-lg font-semibold border-b border-gray-700 pb-2">
-                Storage
-              </h3>
-              <div class="text-sm space-y-3">
-                <div *ngIf="mediaItem.gcsUris?.length">
-                  <strong class="font-semibold text-gray-400 block mb-1">GCS URIs:</strong>
-                  <ul class="space-y-1">
-                    <li *ngFor="let uri of mediaItem.gcsUris">
-                      <a [href]="getGcsLink(uri)" target="_blank" rel="noopener noreferrer"
-                        class="p-3 rounded-md bg-gray-800 block break-all hover:bg-gray-700 transition-colors">
-                        {{ uri }}
-                      </a>
-                    </li>
-                  </ul>
+            @if (!isYoutubeVideo) {
+              <!-- Storage -->
+              <section class="space-y-3">
+                <h3 class="text-lg font-semibold border-b border-gray-700 pb-2">
+                  Storage
+                </h3>
+                <div class="text-sm space-y-3">
+                  <div *ngIf="mediaItem.gcsUris?.length">
+                    <strong class="font-semibold text-gray-400 block mb-1">GCS URIs:</strong>
+                    <ul class="space-y-1">
+                      <li *ngFor="let uri of mediaItem.gcsUris">
+                        <a [href]="getGcsLink(uri)" target="_blank" rel="noopener noreferrer"
+                          class="p-3 rounded-md bg-gray-800 block break-all hover:bg-gray-700 transition-colors">
+                          {{ uri }}
+                        </a>
+                      </li>
+                    </ul>
+                  </div>
                 </div>
-            </div>
-            </section>
-
-            <!-- Other -->
-            <section class="space-y-3">
-              <h3 class="text-lg font-semibold border-b border-gray-700 pb-2">
-                Other
-              </h3>
-              <div class="text-sm space-y-3">
-                <div *ngIf="mediaItem.comment">
-                  <strong class="font-semibold text-gray-400 block mb-1">Comment:</strong>
-                  <p class="p-3 rounded-md bg-gray-800 text-gray-300">
-                    {{ mediaItem.comment }}
-                  </p>
-                </div>
-                <div *ngIf="mediaItem.critique">
-                  <strong class="font-semibold text-gray-400 block mb-1">Critique:</strong>
-                  <p class="p-3 rounded-md bg-gray-800 text-gray-300">
-                    {{ mediaItem.critique }}
-                  </p>
-                </div>
-              </div>
               </section>
+
+              <!-- Other -->
+              <section class="space-y-3">
+                <h3 class="text-lg font-semibold border-b border-gray-700 pb-2">
+                  Other
+                </h3>
+                <div class="text-sm space-y-3">
+                  <div *ngIf="mediaItem.comment">
+                    <strong class="font-semibold text-gray-400 block mb-1">Comment:</strong>
+                    <p class="p-3 rounded-md bg-gray-800 text-gray-300">
+                      {{ mediaItem.comment }}
+                    </p>
+                  </div>
+                  <div *ngIf="mediaItem.critique">
+                    <strong class="font-semibold text-gray-400 block mb-1">Critique:</strong>
+                    <p class="p-3 rounded-md bg-gray-800 text-gray-300">
+                      {{ mediaItem.critique }}
+                    </p>
+                  </div>
+                </div>
+              </section>
+            }
           </div>
           </mat-tab>
           

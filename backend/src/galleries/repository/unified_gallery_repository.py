@@ -57,6 +57,12 @@ class UnifiedGalleryRepository(
         if not search_dto.include_deleted:
             query = query.where(self.model.deleted_at.is_(None))
 
+        # External URL Filter (hide YouTube reference rows unless requested)
+        if not getattr(search_dto, "include_external", False):
+            query = query.where(
+                self.model.metadata_["external_url"].astext.is_(None)
+            )
+
         # Filter by workspace (conditional for admins)
         if search_dto.workspace_id is not None:
             query = query.where(

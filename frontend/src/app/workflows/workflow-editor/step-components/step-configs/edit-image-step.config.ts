@@ -19,9 +19,8 @@ import {StepConfig} from '../generic-step/step.model';
 
 const model_options = MODEL_CONFIGS.filter(
   model =>
-    model.value === 'gemini-2.5-flash-image' ||
-    model.value === 'gemini-3-pro-image' ||
-    model.value === 'gemini-3.1-flash-image',
+    model.type === 'IMAGE' &&
+    model.capabilities.supportedModes.includes('Ingredients to Image'),
 ).map(model => ({
   value: model.value,
   label: model.viewValue,

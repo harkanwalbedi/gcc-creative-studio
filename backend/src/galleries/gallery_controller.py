@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.auth.auth_guard import RoleChecker, get_current_user
 from src.common.dto.pagination_response_dto import PaginationResponseDto
@@ -38,10 +38,12 @@ stream_router = APIRouter(
 @stream_router.get("/media-stream")
 async def stream_media(
     uri: str,
+    request: Request,
     service: GalleryService = Depends(),
 ):
     """Streams a GCS media file directly to the client for playback / preview."""
-    return await service.stream_gcs_media(uri)
+    range_header = request.headers.get("range")
+    return await service.stream_gcs_media(uri, range_header=range_header)
 
 
 router = APIRouter(

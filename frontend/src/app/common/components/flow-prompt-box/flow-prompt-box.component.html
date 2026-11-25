@@ -82,9 +82,9 @@
         @if (hasResolutionOptions()) {
           <button
             (click)="toggleSettingsMenu(); $event.stopPropagation()"
-            class="rounded-md bg-neutral-800 px-2 py-1.5 cursor-pointer hover:bg-neutral-700"
+            class="rounded-md bg-neutral-800 px-2 py-1 cursor-pointer hover:bg-neutral-700"
           >
-            <mat-icon class="!h-4 !w-4 !flex !items-center !justify-center">{{ selectedResolution() | lowercase }}</mat-icon>
+            {{ getResolutionLabel(selectedResolution()) }}
           </button>
         }
         <!--
@@ -100,6 +100,50 @@
             class="rounded-md bg-neutral-800 px-2 py-1 cursor-pointer hover:bg-neutral-700"
           >
             {{ temperature === null ? 'T auto' : 'T ' + temperature }}
+          </button>
+        }
+        <!--
+          Transform Strength is worth seeing at a glance while iterating on a video restyle,
+          so it sits with the other settings rather than only inside the popup.
+        -->
+        @if (supportsTransformStrength) {
+          <button
+            (click)="toggleSettingsMenu(); $event.stopPropagation()"
+            [matTooltip]="'Transform Strength: ' + transformStrength + ' (Click to adjust)'"
+            class="rounded-md bg-neutral-800 px-2 py-1 cursor-pointer hover:bg-neutral-700 font-mono text-xs text-blue-400 flex items-center gap-1"
+          >
+            <mat-icon class="!text-xs !h-3.5 !w-3.5 flex items-center justify-center">tune</mat-icon>
+            <span>{{ transformStrength }}</span>
+          </button>
+        }
+        @if (supportsDiffusionSteps) {
+          <button
+            (click)="toggleSettingsMenu(); $event.stopPropagation()"
+            [matTooltip]="'Diffusion Steps: ' + numDiffusionSteps + ' (Click to adjust)'"
+            class="rounded-md bg-neutral-800 px-2 py-1 cursor-pointer hover:bg-neutral-700 font-mono text-xs text-neutral-300 flex items-center gap-1"
+          >
+            <mat-icon class="!text-xs !h-3.5 !w-3.5 flex items-center justify-center text-neutral-400">stacked_line_chart</mat-icon>
+            <span>{{ numDiffusionSteps }} steps</span>
+          </button>
+        }
+        @if (supportsSeed) {
+          <button
+            (click)="toggleSettingsMenu(); $event.stopPropagation()"
+            [matTooltip]="seed === null ? 'Seed: Auto / Random (Click to set fixed seed)' : 'Seed: ' + seed + ' (Click to adjust)'"
+            class="rounded-md bg-neutral-800 px-2 py-1 cursor-pointer hover:bg-neutral-700 font-mono text-xs text-neutral-300 flex items-center gap-1"
+          >
+            <mat-icon class="!text-xs !h-3.5 !w-3.5 flex items-center justify-center text-neutral-400">casino</mat-icon>
+            <span>{{ seed === null ? 'Seed auto' : 'Seed ' + seed }}</span>
+          </button>
+        }
+        @if (proFormatBadgeLabel; as proBadge) {
+          <button
+            (click)="toggleSettingsMenu(); $event.stopPropagation()"
+            [matTooltip]="'Delivery Format: ' + selectedDeliveryFormatLabel + ' (Click to adjust)'"
+            class="rounded-md bg-neutral-800 px-2 py-1 cursor-pointer hover:bg-neutral-700 font-mono text-xs text-amber-300 flex items-center gap-1"
+          >
+            <mat-icon class="!text-xs !h-3.5 !w-3.5 flex items-center justify-center">high_quality</mat-icon>
+            <span>{{ proBadge }}</span>
           </button>
         }
       </div>
@@ -131,8 +175,13 @@
     <div class="flex flex-wrap items-end justify-between gap-y-4">
       <!-- Left: Drag-and-drop areas -->
       <div class="flex flex-wrap items-center gap-3">
+        <div *ngIf="mode === 'Frames to Video' && supportsSeamlessLoop && seamlessLoop"
+          class="text-[11px] text-neutral-400 flex items-center gap-1.5">
+          <mat-icon class="!h-3.5 !w-3.5 !text-xs text-blue-400">loop</mat-icon>
+          <span>Temporal Loop is active — uncheck Temporal Loop in settings to attach start/end frames.</span>
+        </div>
         <!-- Frames to Video / Concatenate / Extend Inputs -->
-        <ng-container *ngIf="mode === 'Frames to Video' || mode === 'Concatenate Video' || mode === 'Extend Video'">
+        <ng-container *ngIf="(mode === 'Frames to Video' || mode === 'Concatenate Video' || mode === 'Extend Video') && !(supportsSeamlessLoop && seamlessLoop)">
           <!-- Slot 1: Always shown for these modes -->
           <div
             class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-neutral-500 hover:bg-neutral-700 flex items-center justify-center"
@@ -170,13 +219,58 @@
             </ng-container>
           </div>
 
+          <!-- Multiple Conditioning Frames for I2V Keyframes -->
+          <ng-container *ngIf="getSelectedModelObject()?.capabilities?.supportsConditioningFrames">
+            <!-- Intermediate Keyframes List -->
+            <div *ngFor="let kf of conditioningKeyframes; let kfIndex = index" class="relative h-20 w-20 rounded-xl border border-neutral-700 bg-neutral-800 overflow-hidden flex items-center justify-center group">
+              <img [src]="kf.previewUrl" class="h-full w-full object-cover" />
+              <!-- Clickable Frame Number Badge with Dropdown -->
+              <button
+                type="button"
+                [matMenuTriggerFor]="frameMenu"
+                (click)="$event.stopPropagation()"
+                class="absolute bottom-0 left-0 right-0 bg-neutral-900/90 hover:bg-blue-600 px-1 py-0.5 text-center text-[9px] font-mono text-blue-200 hover:text-white transition-colors cursor-pointer flex items-center justify-center gap-0.5"
+                matTooltip="Click to change frame number (multiple of 8)"
+              >
+                <span>#{{ kf.frameNumber }} ({{ (kf.frameNumber / 24).toFixed(1) }}s)</span>
+                <mat-icon class="!h-2.5 !w-2.5 !text-[10px] leading-none">arrow_drop_down</mat-icon>
+              </button>
+
+              <mat-menu #frameMenu="matMenu" class="max-h-60 overflow-y-auto">
+                <div class="px-3 py-1 text-[11px] font-semibold text-neutral-400 border-b border-neutral-700">
+                  Select Frame (Every 8th Frame)
+                </div>
+                <button
+                  *ngFor="let fn of validFrameNumbers"
+                  mat-menu-item
+                  (click)="kf.frameNumber = fn; keyframeFrameNumberChanged.emit({index: kfIndex, frameNumber: fn})"
+                  [class.text-blue-400]="kf.frameNumber === fn"
+                  class="text-xs"
+                >
+                  <span>Frame #{{ fn }} ({{ (fn / 24).toFixed(2) }}s)</span>
+                </button>
+              </mat-menu>
+
+              <button
+                (click)="$event.stopPropagation(); removeKeyframeClicked.emit(kfIndex)"
+                class="absolute -right-1 -top-1 rounded-full bg-neutral-900 p-0.5 text-neutral-400 hover:text-white"
+              >
+                <mat-icon class="!h-3 !w-3 text-xs">close</mat-icon>
+              </button>
+            </div>
+
+            <!-- Add Keyframe Button Slot -->
+            <div
+              class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-blue-500 hover:bg-neutral-700 flex flex-col items-center justify-center"
+              (click)="addKeyframeClicked.emit()"
+              matTooltip="Add intermediate conditioning frame (e.g. frame 8, 16, 24, 48, 128)"
+            >
+              <mat-icon class="text-neutral-400">add_photo_alternate</mat-icon>
+              <span class="absolute bottom-1 text-[8px] text-neutral-400 text-center leading-tight">+ Frame</span>
+            </div>
+          </ng-container>
+
           <!-- Arrow: Shown only if we have a second slot -->
-          <!--
-            Slot 2 is a closing frame in Frames to Video and a second clip in
-            Concatenate. Gemini Omni cannot interpolate between two frames and
-            the backend rejects an end frame outright, so offering the slot only
-            invited a 422.
-          -->
           <mat-icon *ngIf="showSecondSlot" class="text-neutral-500">compare_arrows</mat-icon>
 
           <div
@@ -185,9 +279,11 @@
             (click)="openImageSelector.emit(2)"
             (dragover)="$event.preventDefault()"
             (drop)="$event.preventDefault(); openImageSelector.emit(2)"
+            matTooltip="Optional closing frame (last frame)"
           >
             <ng-container *ngIf="!image2Preview">
               <mat-icon class="text-neutral-500">add</mat-icon>
+              <span class="absolute bottom-1 text-[8px] text-neutral-500">Last Frame</span>
             </ng-container>
             <ng-container *ngIf="image2Preview">
               <div class="group absolute inset-0 rounded-lg overflow-hidden">
@@ -223,23 +319,49 @@
               </button>
             </ng-container>
           </div>
-          <div class="w-full text-[11px] text-neutral-500">
-            Describe only what should change. Adding
-            <span class="font-mono text-neutral-400">Keep everything else the same</span>
-            helps preserve the rest of the shot.
+
+          <!-- Optional Inpainting Mask slot for Video Transform -->
+          <div
+            *ngIf="getSelectedModelObject()?.capabilities?.supportsMask"
+            class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-blue-500 hover:bg-neutral-700 flex flex-col items-center justify-center group"
+            (click)="!maskSource && openVideoSelectorForMask.emit()"
+            [matTooltip]="maskSource ? 'Inpainting mask attached' : 'Upload or select mask video'"
+          >
+            <ng-container *ngIf="!maskSource">
+              <mat-icon class="text-neutral-400 group-hover:text-blue-400 transition-colors">cloud_upload</mat-icon>
+              <span class="absolute bottom-1 text-[8px] text-neutral-400 text-center leading-tight">
+                Upload Mask
+              </span>
+            </ng-container>
+            <ng-container *ngIf="maskSource">
+              <img *ngIf="maskSource.previewUrl" [src]="maskSource.previewUrl"
+                class="h-full w-full rounded-lg object-cover" />
+              <button (click)="$event.stopPropagation(); clearMaskSource.emit($event)"
+                class="absolute -right-1 -top-1 rounded-full bg-neutral-900 p-0.5 text-neutral-400 hover:text-white">
+                <mat-icon class="!h-3 !w-3 text-xs">close</mat-icon>
+              </button>
+            </ng-container>
           </div>
-          <!--
-            Omni refuses to edit a clip containing speech when reference images
-            are also supplied, and its own output always has audio, so this
-            defaults on.
-          -->
-          <label class="flex w-full cursor-pointer items-center gap-2 text-[11px] text-neutral-400">
-            <input type="checkbox" [checked]="stripSourceAudio"
-              (change)="stripSourceAudioChanged.emit(!stripSourceAudio)"
-              class="h-3 w-3 accent-blue-600" />
-            Remove audio from the source clip
-            <span class="text-neutral-600">(needed when using reference images)</span>
-          </label>
+
+          <!-- Gemini Omni specific prompt tips -->
+          <ng-container *ngIf="getSelectedModelObject()?.value?.startsWith('gemini-omni')">
+            <div class="w-full text-[11px] text-neutral-500">
+              Describe only what should change. Adding
+              <span class="font-mono text-neutral-400">Keep everything else the same</span>
+              helps preserve the rest of the shot.
+            </div>
+            <label class="flex w-full cursor-pointer items-center gap-2 text-[11px] text-neutral-400">
+              <input type="checkbox" [checked]="stripSourceAudio"
+                (change)="stripSourceAudioChanged.emit(!stripSourceAudio)"
+                class="h-3 w-3 accent-blue-600" />
+              Remove audio from the source clip
+              <span class="text-neutral-600">(needed when using reference images)</span>
+            </label>
+          </ng-container>
+          <div *ngIf="getSelectedModelObject()?.value === 'veo-exp-perf-estimation'"
+            class="w-full text-[11px] text-neutral-400">
+            Extracts a 2D Blue Mesh performance video from the selected actor clip.
+          </div>
         </ng-container>
 
         <!--
@@ -249,49 +371,51 @@
         -->
         <ng-container *ngIf="mode === 'Ingredients to Video' || mode === 'Ingredients to Image' || mode === 'Edit Video' || (mode === 'Frames to Video' && supportsFramePlusReferences)">
           <ng-container *ngIf="getSelectedModelObject() as model">
-            <div
-              class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-neutral-500 hover:bg-neutral-700 flex items-center justify-center"
-              [class.opacity-50]="referenceImages.length >= model.capabilities.maxReferenceImages"
-              (click)="referenceImages.length < model.capabilities.maxReferenceImages && openImageSelectorForReference.emit()"
-              (dragover)="$event.preventDefault()"
-              (drop)="$event.preventDefault(); onReferenceImageDrop.emit($event)"
-            >
-              <mat-icon class="text-neutral-500">add</mat-icon>
-              <span class="absolute bottom-0 text-[10px] text-neutral-500">{{ referenceImages.length }}/{{
-                model.capabilities.maxReferenceImages }}</span>
+            <ng-container *ngIf="model.capabilities.maxReferenceImages > 0">
+              <div
+                class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-neutral-500 hover:bg-neutral-700 flex items-center justify-center"
+                [class.opacity-50]="referenceImages.length >= model.capabilities.maxReferenceImages"
+                (click)="referenceImages.length < model.capabilities.maxReferenceImages && openImageSelectorForReference.emit()"
+                (dragover)="$event.preventDefault()"
+                (drop)="$event.preventDefault(); onReferenceImageDrop.emit($event)"
+              >
+                <mat-icon class="text-neutral-500">add</mat-icon>
+                <span class="absolute bottom-0 text-[10px] text-neutral-500">{{ referenceImages.length }}/{{
+                  model.capabilities.maxReferenceImages }}</span>
+                </div>
+                <!-- Show small previews of reference images -->
+              <div class="flex flex-wrap gap-1">
+                <div *ngFor="let ref of referenceImages; let i = index" class="relative h-12 w-12 flex-shrink-0 group rounded-lg overflow-hidden"
+                  [class.highlight-new]="ref.isNew">
+                  <img [src]="ref.previewUrl" class="h-full w-full object-cover" />
+                  <ng-container *ngTemplateOutlet="editOverlay; context: { index: i, ref: ref, small: true }"></ng-container>
+                  <!--
+                    The tag index is otherwise invisible: references are bound by
+                    position, so a user would have to count thumbnails and type
+                    the tag by hand. Clicking inserts it at the caret.
+                  -->
+                  <button *ngIf="supportsRoleTags"
+                    (click)="$event.stopPropagation(); insertRoleTag('<IMAGE_REF_' + (i + roleTagOffset) + '>')"
+                    [matTooltip]="'Insert <IMAGE_REF_' + (i + roleTagOffset) + '> into the prompt to refer to this image'"
+                    class="absolute bottom-0 left-0 rounded-tr-md bg-neutral-900/80 px-1 text-[10px] font-mono text-neutral-300 hover:bg-blue-600 hover:text-white">
+                    {{ i + roleTagOffset }}
+                  </button>
+                  <button (click)="$event.stopPropagation(); clearReferenceImage.emit({index: i, event: $event})"
+                    class="absolute -right-1 -top-1 rounded-full bg-neutral-900 p-0.5 text-neutral-400 hover:text-white">
+                    <mat-icon class="!h-3 !w-3 text-xs">close</mat-icon>
+                  </button>
+                </div>
               </div>
-              <!-- Show small previews of reference images -->
-            <div class="flex flex-wrap gap-1">
-              <div *ngFor="let ref of referenceImages; let i = index" class="relative h-12 w-12 flex-shrink-0 group rounded-lg overflow-hidden"
-                [class.highlight-new]="ref.isNew">
-                <img [src]="ref.previewUrl" class="h-full w-full object-cover" />
-                <ng-container *ngTemplateOutlet="editOverlay; context: { index: i, ref: ref, small: true }"></ng-container>
-                <!--
-                  The tag index is otherwise invisible: references are bound by
-                  position, so a user would have to count thumbnails and type
-                  the tag by hand. Clicking inserts it at the caret.
-                -->
-                <button *ngIf="supportsRoleTags"
-                  (click)="$event.stopPropagation(); insertRoleTag('<IMAGE_REF_' + (i + roleTagOffset) + '>')"
-                  [matTooltip]="'Insert <IMAGE_REF_' + (i + roleTagOffset) + '> into the prompt to refer to this image'"
-                  class="absolute bottom-0 left-0 rounded-tr-md bg-neutral-900/80 px-1 text-[10px] font-mono text-neutral-300 hover:bg-blue-600 hover:text-white">
-                  {{ i + roleTagOffset }}
-                </button>
-                <button (click)="$event.stopPropagation(); clearReferenceImage.emit({index: i, event: $event})"
-                  class="absolute -right-1 -top-1 rounded-full bg-neutral-900 p-0.5 text-neutral-400 hover:text-white">
-                  <mat-icon class="!h-3 !w-3 text-xs">close</mat-icon>
-                </button>
+              <!-- Discoverability: the tag syntax is not guessable. -->
+              <div *ngIf="supportsRoleTags && referenceImages.length > 1"
+                class="w-full text-[11px] text-neutral-500">
+                Tip: click an image's number to insert its tag, e.g.
+                <span class="font-mono text-neutral-400">&lt;IMAGE_REF_0&gt; wears &lt;IMAGE_REF_1&gt;</span>,
+                to control which reference is which. An opening frame counts as
+                <span class="font-mono text-neutral-400">&lt;IMAGE_REF_0&gt;</span>,
+                so the references after it start at 1.
               </div>
-            </div>
-            <!-- Discoverability: the tag syntax is not guessable. -->
-            <div *ngIf="supportsRoleTags && referenceImages.length > 1"
-              class="w-full text-[11px] text-neutral-500">
-              Tip: click an image's number to insert its tag, e.g.
-              <span class="font-mono text-neutral-400">&lt;IMAGE_REF_0&gt; wears &lt;IMAGE_REF_1&gt;</span>,
-              to control which reference is which. An opening frame counts as
-              <span class="font-mono text-neutral-400">&lt;IMAGE_REF_0&gt;</span>,
-              so the references after it start at 1.
-            </div>
+            </ng-container>
           </ng-container>
 
             <!-- Video Reference Slot(s), gated on capability rather than model name. -->
@@ -326,32 +450,137 @@
               </div>
             </ng-container>
 
-            <!--
-              Audio Reference Slot. Gated on capability, not on a model name:
-              no current video model accepts an audio reference. Omni's API
-              takes the part and ignores it, so offering the control invited
-              silent failure - and now a rejected request.
-            -->
-            <div *ngIf="mode === 'Ingredients to Video' && getSelectedModelObject()?.capabilities?.supportsAudioReference"
-              class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-neutral-500 hover:bg-neutral-700 flex flex-col items-center justify-center"
-              (click)="!referenceAudio && openAudioSelectorForReference.emit()"
+            <!-- Dialogue Lip Sync Portrait note -->
+            <div *ngIf="mode === 'Ingredients to Video' && getSelectedModelObject()?.value === 'veo-exp-a2v-generation'"
+              class="w-full mt-2 flex items-start gap-1.5 text-[11px] text-neutral-400 leading-relaxed">
+              <mat-icon class="!h-4 !w-4 !text-[15px] !leading-none text-blue-400 flex-shrink-0 mt-0.5">info</mat-icon>
+              <span class="flex-1">
+                <strong class="text-neutral-300">Portrait (9:16) Workflow:</strong> The model renders natively in 16:9; portrait stills are automatically padded with black pillarboxes and center-cropped post-generation to deliver a seamless vertical video.
+              </span>
+            </div>
+        </ng-container>
+
+        <!-- Audio Reference Slot (Ingredients to Video or Omni-Cine/Omni-Perf target/reference audio) -->
+        <div *ngIf="showAudioReferenceSlot"
+          class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-neutral-500 hover:bg-neutral-700 flex flex-col items-center justify-center"
+          (click)="!referenceAudio && openAudioSelectorForReference.emit()"
+        >
+          <ng-container *ngIf="!referenceAudio">
+            <mat-icon class="text-neutral-500">audiotrack</mat-icon>
+            <span class="absolute bottom-1 text-[8px] text-neutral-500">Audio Ref</span>
+          </ng-container>
+          <ng-container *ngIf="referenceAudio">
+            <mat-icon class="text-blue-400 !text-3xl !h-8 !w-8 flex items-center justify-center">music_note</mat-icon>
+            <span class="absolute bottom-1 text-[8px] text-neutral-300 max-w-[64px] truncate">{{ referenceAudio.name || 'Audio' }}</span>
+            <button
+              (click)="$event.stopPropagation(); clearReferenceAudio.emit($event)"
+              class="absolute -right-2 -top-2 rounded-full bg-neutral-900 p-0.5 text-neutral-400 hover:text-white"
             >
-              <ng-container *ngIf="!referenceAudio">
-                <mat-icon class="text-neutral-500">audiotrack</mat-icon>
-                <span class="absolute bottom-1 text-[8px] text-neutral-500">Audio Ref</span>
-              </ng-container>
-              <ng-container *ngIf="referenceAudio">
-                <mat-icon class="text-blue-400 !text-3xl !h-8 !w-8 flex items-center justify-center">music_note</mat-icon>
-                <span class="absolute bottom-1 text-[8px] text-neutral-300 max-w-[64px] truncate">{{ referenceAudio.name || 'Audio' }}</span>
+              <mat-icon class="!h-4 !w-4 text-sm">close</mat-icon>
+            </button>
+          </ng-container>
+        </div>
+
+        <!-- Only for Video to Image mode -->
+        @if (mode === 'Video to Image') {
+          <!-- Video Reference Slot -->
+          @if (!externalUrl) {
+            <div
+              class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-neutral-500 hover:bg-neutral-700 flex flex-col items-center justify-center"
+              (click)="!referenceVideo && openVideoSelectorForReference.emit()"
+            >
+              @if (!referenceVideo) {
+                <mat-icon class="text-neutral-500">videocam</mat-icon>
+                <span class="absolute bottom-1 text-[8px] text-neutral-500"
+                  >Video Ref</span
+                >
+              } @else {
+                @if (
+                  referenceVideo.type === 'media_item' ||
+                  referenceVideo.previewUrl?.includes('.png') ||
+                  referenceVideo.previewUrl?.includes('.webp') ||
+                  referenceVideo.previewUrl?.includes('.jpg') ||
+                  referenceVideo.previewUrl?.includes('.jpeg') ||
+                  referenceVideo.previewUrl?.includes('presignedThumbnailUrls')
+                ) {
+                  <img
+                    [src]="referenceVideo.previewUrl"
+                    class="h-full w-full rounded-lg object-cover"
+                  />
+                } @else {
+                  <video
+                    [src]="referenceVideo.previewUrl"
+                    class="h-full w-full rounded-lg object-cover"
+                    muted
+                  ></video>
+                }
                 <button
-                  (click)="$event.stopPropagation(); clearReferenceAudio.emit($event)"
+                  (click)="
+                    $event.stopPropagation(); clearReferenceVideo.emit($event)
+                  "
                   class="absolute -right-2 -top-2 rounded-full bg-neutral-900 p-0.5 text-neutral-400 hover:text-white"
                 >
                   <mat-icon class="!h-4 !w-4 text-sm">close</mat-icon>
                 </button>
-              </ng-container>
+              }
             </div>
-        </ng-container>
+          }
+
+          <!-- Video Reference YouTube Link Slot -->
+          @if (!referenceVideo) {
+            <div
+              class="relative h-20 w-20 cursor-pointer rounded-xl border-2 border-dashed border-neutral-700 bg-neutral-800 transition-colors hover:border-neutral-500 hover:bg-neutral-700 flex flex-col items-center justify-center"
+              (click)="!externalUrl && openVideoUrlInputForReference.emit()"
+              [matTooltip]="externalUrl || ''"
+            >
+              @if (!externalUrl) {
+                <mat-icon class="text-neutral-500">link</mat-icon>
+                <span class="absolute bottom-1 text-[8px] text-neutral-500"
+                  >YouTube Link</span
+                >
+              } @else {
+                @if (youtubeThumbnailUrl(); as thumb) {
+                  <div
+                    class="relative h-full w-full rounded-lg overflow-hidden flex items-center justify-center bg-black"
+                  >
+                    <img
+                      [src]="thumb"
+                      class="h-full w-full object-cover opacity-80"
+                      alt="YouTube preview"
+                    />
+                    <div
+                      class="absolute inset-0 flex items-center justify-center pointer-events-none"
+                    >
+                      <div
+                        class="flex items-center justify-center w-7 h-5 bg-red-600/90 rounded text-white shadow-md"
+                      >
+                        <mat-icon
+                          class="!h-4 !w-4 !text-sm !flex !items-center !justify-center"
+                          >play_arrow</mat-icon
+                        >
+                      </div>
+                    </div>
+                  </div>
+                } @else {
+                  <mat-icon
+                    class="text-red-500 !text-3xl !h-8 !w-8 flex items-center justify-center"
+                    >play_circle</mat-icon
+                  >
+                  <span
+                    class="absolute bottom-1 text-[8px] text-neutral-300 max-w-[64px] truncate"
+                    >YouTube</span
+                  >
+                }
+                <button
+                  (click)="$event.stopPropagation(); clearExternalUrl.emit()"
+                  class="absolute -right-2 -top-2 z-10 rounded-full bg-neutral-900 p-0.5 text-neutral-400 hover:text-white"
+                >
+                  <mat-icon class="!h-4 !w-4 text-sm">close</mat-icon>
+                </button>
+              }
+            </div>
+          }
+        }
         </div>
 
       <!-- Right: Generate Button -->
@@ -460,16 +689,26 @@
               @for (model of generationModels; track model.value) {
                 <button
                   (click)="selectInternalModel(model)"
-                  class="block w-full px-3 py-1.5 text-left text-sm rounded hover:bg-neutral-600 whitespace-pre-wrap"
+                  class="block w-full px-3 py-1.5 text-left text-sm rounded hover:bg-neutral-600 whitespace-pre-wrap disabled:opacity-50 disabled:cursor-not-allowed"
                   [class.bg-neutral-600]="selectedGenerationModel === model.viewValue"
+                  [disabled]="isVideoToImage() && !model.capabilities.supportsVideoReference"
                 >
-                  <div class="flex items-center gap-2">
-                    @if (model.isImage) {
-                      <img [src]="model.imageSrc" class="h-5 w-5 object-contain" alt="model icon" />
-                    } @else if (model.isSvg) {
-                      <mat-icon [svgIcon]="model.icon || ''" class="!h-5 !w-5"></mat-icon>
+                  <div class="flex items-center justify-between gap-2">
+                    <div class="flex items-center gap-2 min-w-0">
+                      @if (model.isImage) {
+                        <img [src]="model.imageSrc" class="h-5 w-5 object-contain flex-shrink-0" alt="model icon" />
+                      } @else if (model.isSvg) {
+                        <mat-icon [svgIcon]="model.icon || ''" class="!h-5 !w-5 flex-shrink-0"></mat-icon>
+                      } @else if (model.icon) {
+                        <mat-icon class="!h-4 !w-4 !text-base flex items-center justify-center text-neutral-400 flex-shrink-0">{{ model.icon }}</mat-icon>
+                      }
+                      <span class="truncate">{{ model.viewValue }}</span>
+                    </div>
+                    @if (model.capabilities.requiresVpe) {
+                      <span class="rounded bg-blue-500/20 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-blue-300 flex-shrink-0">
+                        GMP
+                      </span>
                     }
-                    {{ model.viewValue }}
                   </div>
                 </button>
               }
@@ -495,9 +734,8 @@
               class="relative w-full flex items-center justify-between rounded-lg bg-neutral-700 px-3 py-2 text-left text-sm"
             >
               <span class="flex items-center gap-2 min-w-0">
-                <!-- Landscape Icon -->
                 <mat-icon class="flex-shrink-0">
-                  {{ aspectRatio.includes('16:9') ? 'crop_landscape' : 'crop_portrait' }}
+                  {{ getAspectRatioIcon(aspectRatio) }}
                 </mat-icon>
                 <span class="truncate whitespace-nowrap">{{ aspectRatio }}</span>
               </span>
@@ -620,6 +858,91 @@
           </div>
         }
 
+        <!-- Transform Strength: Veo Video Transform models only -->
+        @if (supportsTransformStrength) {
+          <div class="relative">
+            <label for="transformStrengthMenu" class="block text-xs font-medium text-neutral-400 mb-1.5">
+              Transform Strength
+            </label>
+            <div class="flex items-center gap-2">
+              <input id="transformStrengthMenu" type="range" min="0.1" max="1.0" step="0.05"
+                [value]="transformStrength"
+                (input)="onTransformStrengthInput($event)"
+                class="h-1 w-28 cursor-pointer accent-blue-600" />
+              <span class="w-8 text-right font-mono text-xs text-blue-400">
+                {{ transformStrength }}
+              </span>
+              <button *ngIf="transformStrength !== 0.5"
+                (click)="transformStrengthChanged.emit(0.5)"
+                matTooltip="Reset to default (0.5)"
+                class="text-[10px] text-neutral-500 hover:text-neutral-300">reset</button>
+            </div>
+            <p class="mt-1 text-[10px] text-neutral-600">
+              {{ transformStrength < 0.36 ? 'Subtle restyle / strict structure' : transformStrength < 0.7 ? 'Moderate restyle / style transfer' : 'Heavy structural transformation' }}
+            </p>
+          </div>
+        }
+
+        <!-- Diffusion Steps: Models supporting steps configuration -->
+        @if (supportsDiffusionSteps) {
+          <div class="relative">
+            <label for="diffusionStepsMenu" class="block text-xs font-medium text-neutral-400 mb-1.5">
+              Diffusion Steps
+            </label>
+            <div class="flex items-center gap-2">
+              <input id="diffusionStepsMenu" type="range" min="1" max="250" step="1"
+                [value]="numDiffusionSteps"
+                (input)="onNumDiffusionStepsInput($event)"
+                class="h-1 w-28 cursor-pointer accent-blue-600" />
+              <span class="w-8 text-right font-mono text-xs text-blue-400">
+                {{ numDiffusionSteps }}
+              </span>
+              <button *ngIf="numDiffusionSteps !== 20"
+                (click)="numDiffusionStepsChanged.emit(20)"
+                matTooltip="Reset to default (20)"
+                class="text-[10px] text-neutral-500 hover:text-neutral-300">reset</button>
+            </div>
+            <p class="mt-1 text-[10px] text-neutral-600">
+              Higher steps refine details and quality (1-250, default 20).
+            </p>
+          </div>
+        }
+
+        <!-- Seed: Models supporting seed control -->
+        @if (supportsSeed) {
+          <div class="relative">
+            <label for="seedInputMenu" class="block text-xs font-medium text-neutral-400 mb-1.5">
+              Seed
+            </label>
+            <div class="flex items-center gap-2">
+              <input
+                id="seedInputMenu"
+                type="number"
+                min="0"
+                max="4294967295"
+                [placeholder]="'Random / Auto'"
+                [value]="seed ?? ''"
+                (input)="onSeedInput($event)"
+                class="w-32 rounded bg-neutral-800 px-2 py-1 text-xs font-mono text-neutral-200 border border-neutral-700 focus:border-blue-500 focus:outline-none"
+              />
+              <button
+                (click)="randomizeSeed()"
+                matTooltip="Generate random seed"
+                class="p-1 rounded hover:bg-neutral-600 text-neutral-400 hover:text-white"
+              >
+                <mat-icon class="!h-4 !w-4 !text-sm flex items-center justify-center">shuffle</mat-icon>
+              </button>
+              <button *ngIf="seed !== null"
+                (click)="seedChanged.emit(null)"
+                matTooltip="Reset to auto/random"
+                class="text-[10px] text-neutral-500 hover:text-neutral-300">reset</button>
+            </div>
+            <p class="mt-1 text-[10px] text-neutral-600">
+              Set fixed seed for deterministic reproducibility.
+            </p>
+          </div>
+        }
+
         <!-- Duration Dropdown -->
         @if (hasDurationOptions()) {
           <div class="relative">
@@ -640,7 +963,7 @@
             </button>
             @if (isSettingsDropdownOpen() === 'duration') {
               <div class="absolute left-0 top-full z-30 mt-1 w-full rounded-lg bg-neutral-700 p-1 shadow-lg max-h-80 overflow-y-auto">
-                @for (duration of getSelectedModelDurations(); track duration) {
+                @for (duration of availableDurations(); track duration) {
                   <button
                     (click)="selectDuration(duration)"
                     class="block w-full px-3 py-1.5 text-left text-sm rounded hover:bg-neutral-600 whitespace-pre-wrap"
@@ -693,6 +1016,141 @@
           </div>
         }
       </div>
+
+      @if (supportsProFormats || supportsAudioControlMode) {
+        <div class="grid gap-3 mt-3 border-t border-neutral-700/70 pt-3"
+          [class.grid-cols-2]="supportsProFormats && supportsAudioControlMode"
+          [class.grid-cols-1]="!(supportsProFormats && supportsAudioControlMode)"
+        >
+          @if (supportsProFormats) {
+            <div class="relative">
+              <label class="block text-xs font-medium text-neutral-400 mb-1.5">
+                Delivery Format
+              </label>
+              <button
+                type="button"
+                (click)="
+                  $event.stopPropagation();
+                  isSettingsDropdownOpen.set(
+                    isSettingsDropdownOpen() === 'deliveryFormat' ? null : 'deliveryFormat'
+                  )
+                "
+                class="relative w-full flex items-center justify-between rounded-lg bg-neutral-700 px-3 py-2 text-left text-sm"
+              >
+                <span class="truncate">{{ selectedDeliveryFormatLabel }}</span>
+                <mat-icon class="transition-transform flex-shrink-0" [class.rotate-180]="isSettingsDropdownOpen() === 'deliveryFormat'">
+                  expand_more
+                </mat-icon>
+              </button>
+              @if (isSettingsDropdownOpen() === 'deliveryFormat') {
+                <div class="absolute left-0 top-full z-30 mt-1 w-full rounded-lg bg-neutral-700 p-1 shadow-lg">
+                  @for (fmt of deliveryFormatOptions; track fmt.key) {
+                    <button
+                      type="button"
+                      (click)="selectDeliveryFormat(fmt)"
+                      class="block w-full px-3 py-1.5 text-left text-sm rounded hover:bg-neutral-600"
+                      [class.bg-neutral-600]="outputCodec === fmt.codec && compressionQuality === fmt.quality"
+                    >
+                      {{ fmt.label }}
+                    </button>
+                  }
+                </div>
+              }
+            </div>
+          }
+
+          @if (supportsAudioControlMode) {
+            <div class="relative">
+              <label class="block text-xs font-medium text-neutral-400 mb-1.5">
+                Audio Control
+              </label>
+              <button
+                type="button"
+                (click)="
+                  $event.stopPropagation();
+                  isSettingsDropdownOpen.set(
+                    isSettingsDropdownOpen() === 'audioControl' ? null : 'audioControl'
+                  )
+                "
+                class="relative w-full flex items-center justify-between rounded-lg bg-neutral-700 px-3 py-2 text-left text-sm"
+              >
+                <span class="truncate">{{ selectedAudioControlLabel }}</span>
+                <mat-icon class="transition-transform flex-shrink-0" [class.rotate-180]="isSettingsDropdownOpen() === 'audioControl'">
+                  expand_more
+                </mat-icon>
+              </button>
+              @if (isSettingsDropdownOpen() === 'audioControl') {
+                <div class="absolute left-0 top-full z-30 mt-1 w-full rounded-lg bg-neutral-700 p-1 shadow-lg">
+                  @for (audioOpt of availableAudioControlOptions; track audioOpt.value) {
+                    <button
+                      type="button"
+                      (click)="selectAudioControlMode(audioOpt.value)"
+                      class="block w-full px-3 py-1.5 text-left text-sm rounded hover:bg-neutral-600"
+                      [class.bg-neutral-600]="(audioControlMode ?? 'generate') === audioOpt.value"
+                    >
+                      {{ audioOpt.label }}
+                    </button>
+                  }
+                </div>
+              }
+            </div>
+          }
+        </div>
+      }
+
+      @if (supportsPerformanceControl) {
+        <div class="mt-3 border-t border-neutral-700/70 pt-3">
+          <label class="flex cursor-pointer items-center gap-2.5 text-xs font-medium text-neutral-200">
+            <input
+              type="checkbox"
+              [checked]="isBlueMeshInput"
+              (change)="onBlueMeshInputToggle($event)"
+              class="h-3.5 w-3.5 rounded accent-blue-600"
+            />
+            <span>Driving video is already a Blue Mesh</span>
+          </label>
+          <p class="mt-1 pl-6 text-[11px] text-neutral-400">
+            Leave off to auto-extract a 2D Blue Mesh from a raw actor clip
+          </p>
+        </div>
+      }
+
+      @if (supportsSeamlessLoop) {
+        <div class="mt-3 border-t border-neutral-700/70 pt-3">
+          <span class="block text-xs font-medium text-neutral-400 mb-2">
+            Texture Loop &amp; Spatial Tiling
+          </span>
+          <div class="flex flex-wrap items-center gap-4">
+            <label class="flex cursor-pointer items-center gap-2 text-xs text-neutral-200">
+              <input
+                type="checkbox"
+                [checked]="seamlessLoop"
+                (change)="onSeamlessLoopToggle($event)"
+                class="h-3.5 w-3.5 rounded accent-blue-600"
+              />
+              <span>Temporal Loop</span>
+            </label>
+            <label class="flex cursor-pointer items-center gap-2 text-xs text-neutral-200">
+              <input
+                type="checkbox"
+                [checked]="tessellateHorizontal"
+                (change)="onTessellateHorizontalToggle($event)"
+                class="h-3.5 w-3.5 rounded accent-blue-600"
+              />
+              <span>Tile Horizontal</span>
+            </label>
+            <label class="flex cursor-pointer items-center gap-2 text-xs text-neutral-200">
+              <input
+                type="checkbox"
+                [checked]="tessellateVertical"
+                (change)="onTessellateVerticalToggle($event)"
+                class="h-3.5 w-3.5 rounded accent-blue-600"
+              />
+              <span>Tile Vertical</span>
+            </label>
+          </div>
+        </div>
+      }
     </div>
   }
 

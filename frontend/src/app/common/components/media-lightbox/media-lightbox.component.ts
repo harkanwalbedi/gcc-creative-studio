@@ -27,6 +27,7 @@ import {
 } from '@angular/core';
 import {MediaItem} from '../../models/media-item.model';
 import {GalleryItem} from '../../models/gallery-item.model';
+import {VpeScreeningResponse} from '../../models/vpe.model';
 import PhotoSwipeLightbox from 'photoswipe/lightbox';
 import {Clipboard} from '@angular/cdk/clipboard';
 import {MatSnackBar} from '@angular/material/snack-bar';
@@ -72,6 +73,16 @@ export class MediaLightboxComponent
   @Input() showOmniButton = false;
   @Input() showExtendButton = false;
   @Input() showConcatenateButton = false;
+  @Input() showUpscaleButton = false;
+
+  /**
+   * The host fetches this when the item loads and passes it down, rather
+   * than the lightbox fetching it itself - the lightbox is otherwise a pure
+   * presentational component with no HTTP calls of its own, and screening
+   * is a per-item async answer the host is already positioned to cache.
+   * Undefined means "not checked yet", not "not eligible".
+   */
+  @Input() vpeScreening: VpeScreeningResponse | undefined;
 
   /**
    * Offered but unusable, so the button is shown disabled carrying this rather
@@ -80,6 +91,32 @@ export class MediaLightboxComponent
    */
   readonly noStoredClipReason =
     'This clip has no stored file, so it cannot be sent to the video tools';
+
+  /**
+   * Whether the upscale action is worth offering. Screening can only rule a
+   * clip out, never confirm it, so this is true both when the check found
+   * nothing wrong and when it could not tell - the worker re-verifies the
+   * actual file before spending anything.
+   */
+  get canUpscale(): boolean {
+    return !!this.vpeScreening?.offer;
+  }
+
+  get upscaleDisabledReason(): string {
+    if (!this.hasStoredClip) {
+      return this.noStoredClipReason;
+    }
+    if (!this.vpeScreening) {
+      return 'Checking eligibility...';
+    }
+    if (!this.vpeScreening.offer) {
+      return (
+        this.vpeScreening.findings[0]?.message ||
+        'This clip cannot be upscaled.'
+      );
+    }
+    return 'Upscale to 1080p or 4K';
+  }
 
   get isImage(): boolean {
     return this.mediaItem?.mimeType?.startsWith('image/') ?? false;
@@ -95,7 +132,11 @@ export class MediaLightboxComponent
    * the worker falls back to sending the clip itself.
    */
   get hasStoredClip(): boolean {
-    return !!this.mediaItem?.gcsUris?.[this.selectedIndex];
+    return !!(
+      this.mediaItem?.gcsUris?.[this.selectedIndex] ||
+      (this.mediaItem as any)?.gcsUri ||
+      (this.mediaItem?.gcsUris && this.mediaItem.gcsUris.length > 0)
+    );
   }
 
   @Output() editClicked = new EventEmitter<number>();
@@ -113,6 +154,10 @@ export class MediaLightboxComponent
     selectedIndex: number;
   }>();
   @Output() concatenateClicked = new EventEmitter<{
+    mediaItem: MediaItem;
+    selectedIndex: number;
+  }>();
+  @Output() upscaleClicked = new EventEmitter<{
     mediaItem: MediaItem;
     selectedIndex: number;
   }>();
@@ -265,6 +310,45 @@ export class MediaLightboxComponent
 
   get currentImageUrl(): string {
     return this.selectedUrl || '';
+  }
+
+  get masterDownloadUrl(): string | undefined {
+    return (
+      this.mediaItem?.masterPresignedUrls?.[this.selectedIndex] || undefined
+    );
+  }
+
+  get masterFormatLabel(): string {
+    const itemAny = this.mediaItem as Record<string, any> | undefined;
+    const rawData = itemAny?.['rawData'] || itemAny?.['raw_data'];
+    const codec =
+      rawData?.['output_codec'] ||
+      rawData?.['outputCodec'] ||
+      itemAny?.['output_codec'] ||
+      itemAny?.['outputCodec'];
+    if (codec === 'prores') {
+      return 'ProRes (.mov)';
+    }
+    if (codec === 'dnxhr') {
+      return 'DNxHR (.mxf)';
+    }
+    return 'Master';
+  }
+
+  downloadMaster(): void {
+    const url = this.masterDownloadUrl;
+    if (!url || this.isDownloading) {
+      return;
+    }
+
+    const link = document.createElement('a');
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   }
 
   openInNewTab(): void {
@@ -427,6 +511,14 @@ export class MediaLightboxComponent
     return this.mediaItem?.mimeType?.startsWith('video/') ?? false;
   }
 
+  get isYoutubeVideo(): boolean {
+    const metadata = (this.mediaItem as any)?.metadata;
+    return (
+      metadata?.assetType === 'youtube_video' ||
+      metadata?.asset_type === 'youtube_video'
+    );
+  }
+
   get isAudio(): boolean {
     return this.mediaItem?.mimeType?.startsWith('audio/') ?? false;
   }
@@ -534,7 +626,7 @@ export class MediaLightboxComponent
   // The disabled state lives on the inner button, so a click landing on the
   // wrapper around it would still reach these handlers.
   onEditWithOmniClick(): void {
-    if (this.mediaItem && this.hasStoredClip) {
+    if (this.mediaItem && this.hasStoredClip && !this.isYoutubeVideo) {
       this.editWithOmniClicked.emit({
         mediaItem: this.mediaItem as MediaItem,
         selectedIndex: this.selectedIndex,
@@ -543,7 +635,7 @@ export class MediaLightboxComponent
   }
 
   onExtendWithAiClick() {
-    if (this.mediaItem && this.hasStoredClip) {
+    if (this.mediaItem && this.hasStoredClip && !this.isYoutubeVideo) {
       this.extendWithAiClicked.emit({
         mediaItem: this.mediaItem as MediaItem,
         selectedIndex: this.selectedIndex,
@@ -552,8 +644,22 @@ export class MediaLightboxComponent
   }
 
   onConcatenateClick() {
-    if (this.mediaItem && this.hasStoredClip) {
+    if (this.mediaItem && this.hasStoredClip && !this.isYoutubeVideo) {
       this.concatenateClicked.emit({
+        mediaItem: this.mediaItem as MediaItem,
+        selectedIndex: this.selectedIndex,
+      });
+    }
+  }
+
+  onUpscaleClick() {
+    if (
+      this.mediaItem &&
+      this.hasStoredClip &&
+      this.canUpscale &&
+      !this.isYoutubeVideo
+    ) {
+      this.upscaleClicked.emit({
         mediaItem: this.mediaItem as MediaItem,
         selectedIndex: this.selectedIndex,
       });

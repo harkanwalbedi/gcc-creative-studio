@@ -22,6 +22,7 @@ export enum AssetScopeEnum {
 export enum AssetTypeEnum {
   GENERIC_IMAGE = 'generic_image',
   GENERIC_VIDEO = 'generic_video',
+  YOUTUBE_VIDEO = 'youtube_video',
   VTO_PRODUCT = 'vto_product',
   VTO_PERSON_FEMALE = 'vto_person_female',
   VTO_PERSON_MALE = 'vto_person_male',

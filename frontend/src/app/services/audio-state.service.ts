@@ -17,8 +17,15 @@
 import {Injectable} from '@angular/core';
 import {MODEL_CONFIGS} from '../common/config/model-config';
 
+export const DEFAULT_LYRIA_MODEL = 'lyria-3-clip-preview';
+export const DEFAULT_GEMINI_TTS_MODEL = 'gemini-3.1-flash-tts-preview';
+
+const VALID_UI_AUDIO_MODELS = ['lyria', 'chirp', 'gemini-tts'];
+
 export interface AudioState {
   model: string;
+  lyriaModel: string;
+  geminiTtsModel: string;
   prompt: string;
   negativePrompt: string;
   seed?: number;
@@ -35,10 +42,12 @@ export class AudioStateService {
 
   private defaultState: AudioState = {
     model: 'lyria',
+    lyriaModel: DEFAULT_LYRIA_MODEL,
+    geminiTtsModel: DEFAULT_GEMINI_TTS_MODEL,
     prompt: '',
     negativePrompt: '',
     seed: undefined,
-    sampleCount: 4,
+    sampleCount: 1,
     selectedLanguage: 'en-US',
     selectedVoice: 'Puck',
   };
@@ -50,23 +59,45 @@ export class AudioStateService {
         const parsedState = JSON.parse(saved);
 
         let loadedModel = parsedState.model ?? this.defaultState.model;
-        const isValidAudioModel = MODEL_CONFIGS.some(
-          m => m.type === 'AUDIO' && m.value === loadedModel,
-        );
-
-        if (!isValidAudioModel) {
+        if (!VALID_UI_AUDIO_MODELS.includes(loadedModel)) {
           loadedModel = this.defaultState.model;
         }
 
+        let loadedLyriaModel =
+          parsedState.lyriaModel ?? this.defaultState.lyriaModel;
+        const isValidLyriaModel = MODEL_CONFIGS.some(
+          m =>
+            m.type === 'AUDIO' &&
+            m.value.startsWith('lyria') &&
+            m.value === loadedLyriaModel,
+        );
+        if (!isValidLyriaModel) {
+          loadedLyriaModel = this.defaultState.lyriaModel;
+        }
+
+        let loadedGeminiTtsModel =
+          parsedState.geminiTtsModel ?? this.defaultState.geminiTtsModel;
+        const isValidGeminiTtsModel = MODEL_CONFIGS.some(
+          m =>
+            m.type === 'AUDIO' &&
+            m.value.includes('-tts') &&
+            m.value === loadedGeminiTtsModel,
+        );
+        if (!isValidGeminiTtsModel) {
+          loadedGeminiTtsModel = this.defaultState.geminiTtsModel;
+        }
+
         parsedState.model = loadedModel;
+        parsedState.lyriaModel = loadedLyriaModel;
+        parsedState.geminiTtsModel = loadedGeminiTtsModel;
 
         return {...this.defaultState, ...parsedState};
       } catch (e) {
         console.error('Failed to parse audio state', e);
-        return this.defaultState;
+        return {...this.defaultState};
       }
     }
-    return this.defaultState;
+    return {...this.defaultState};
   }
 
   updateState(partialState: Partial<AudioState>) {

@@ -275,3 +275,171 @@ class TestBackgroundWorkers:
             called_config.speech_config.voice_config.prebuilt_voice_config.voice_name
             == "Aoede"
         )
+
+    @patch("src.database.WorkerDatabase")
+    @patch("src.audios.audio_service.MediaRepository")
+    @patch("src.audios.audio_service.GenAIModelSetup")
+    @patch("src.audios.audio_service.GcsService")
+    def test_process_lyria3_mp3_and_content_blocked_retry_sync(
+        self,
+        mock_gcs,
+        mock_genai,
+        mock_repo_cls,
+        mock_worker_db,
+        sample_user,
+    ):
+        lyria3_dto = CreateAudioDto(
+            workspace_id=1,
+            prompt="Upbeat synthwave track featuring neon city chase scenes",
+            negative_prompt="vocals, distortion",
+            model=GenerationModelEnum.LYRIA_3_CLIP_PREVIEW,
+            sample_count=1,
+        )
+
+        mock_db_factory = MagicMock()
+        mock_worker_db.return_value.__aenter__.return_value = mock_db_factory
+        mock_db_session = AsyncMock()
+        mock_db_factory.return_value.__aenter__.return_value = mock_db_session
+
+        mock_repo = AsyncMock()
+        mock_repo_cls.return_value = mock_repo
+
+        mock_gcs_singleton = MagicMock()
+        mock_gcs_singleton.store_to_gcs.return_value = "gs://foo/lyria3.mp3"
+        mock_gcs.return_value = mock_gcs_singleton
+
+        blocked_err = RuntimeError("400 content_blocked policy filter")
+        ok_interaction = {
+            "outputs": [
+                {
+                    "type": "audio",
+                    "mime_type": "audio/mp3",
+                    "data": "SGVsbG8=",
+                }
+            ]
+        }
+        mock_omni_client = MagicMock()
+        mock_omni_client.interactions.create.side_effect = [
+            blocked_err,
+            ok_interaction,
+        ]
+        mock_genai.get_omni_client.return_value = mock_omni_client
+
+        _process_audio_in_background(
+            media_item_id=127,
+            request_dto=lyria3_dto,
+            user_email=sample_user.email,
+            user_id=sample_user.id,
+        )
+
+        assert mock_omni_client.interactions.create.call_count == 2
+        update_args = mock_repo.update.call_args.args
+        assert update_args[0] == 127
+        assert update_args[1]["status"] == JobStatusEnum.COMPLETED
+        assert update_args[1]["mime_type"] == MimeTypeEnum.AUDIO_MPEG
+        assert "Instrumental background music" in update_args[1]["prompt"]
+
+    @patch("src.database.WorkerDatabase")
+    @patch("src.audios.audio_service.MediaRepository")
+    @patch("src.audios.audio_service.GenAIModelSetup")
+    @patch("src.audios.audio_service.GcsService")
+    def test_process_lyria3_double_content_blocked_marks_failed(
+        self,
+        mock_gcs,
+        mock_genai,
+        mock_repo_cls,
+        mock_worker_db,
+        sample_user,
+    ):
+        lyria3_pro_dto = CreateAudioDto(
+            workspace_id=1,
+            prompt="Cinematic orchestral score with dramatic battle drums",
+            model=GenerationModelEnum.LYRIA_3_PRO_PREVIEW,
+            sample_count=1,
+        )
+
+        mock_db_factory = MagicMock()
+        mock_worker_db.return_value.__aenter__.return_value = mock_db_factory
+        mock_db_session = AsyncMock()
+        mock_db_factory.return_value.__aenter__.return_value = mock_db_session
+
+        mock_repo = AsyncMock()
+        mock_repo_cls.return_value = mock_repo
+        mock_gcs.return_value = MagicMock()
+
+        mock_omni_client = MagicMock()
+        mock_omni_client.interactions.create.side_effect = RuntimeError(
+            "content_blocked"
+        )
+        mock_genai.get_omni_client.return_value = mock_omni_client
+
+        _process_audio_in_background(
+            media_item_id=128,
+            request_dto=lyria3_pro_dto,
+            user_email=sample_user.email,
+            user_id=sample_user.id,
+        )
+
+        update_args = mock_repo.update.call_args.args
+        assert update_args[0] == 128
+        assert update_args[1]["status"] == JobStatusEnum.FAILED
+        assert "content_blocked" in update_args[1]["error_message"]
+
+
+def test_lyria3_helpers_and_gemini_3_1_tts_dto():
+    from src.audios.audio_service import (
+        _build_lyria3_prompt,
+        _extract_lyria3_audio,
+        _is_lyria3_content_blocked,
+        _simplify_lyria3_prompt,
+    )
+
+    tts_dto = CreateAudioDto(
+        workspace_id=1,
+        prompt="Hello world",
+        model=GenerationModelEnum.GEMINI_3_1_FLASH_TTS_PREVIEW,
+        language_code=LanguageEnum.EN_US,
+        voice_name=VoiceEnum.PUCK,
+    )
+    assert tts_dto.model == GenerationModelEnum.GEMINI_3_1_FLASH_TTS_PREVIEW
+    assert tts_dto.model in AudioService.GEMINI_MODELS
+
+    music_dto = CreateAudioDto(
+        workspace_id=1,
+        prompt="Warm acoustic guitar",
+        negative_prompt="drums",
+        model=GenerationModelEnum.LYRIA_3_CLIP_PREVIEW,
+    )
+    assert "Avoid: drums" in _build_lyria3_prompt(music_dto)
+    simplified = _simplify_lyria3_prompt(
+        "Warm acoustic guitar featuring dramatic thunderstorm sound effects."
+    )
+    assert simplified.startswith("Warm acoustic guitar.")
+    assert _simplify_lyria3_prompt("   ... ") == ""
+
+    err = Exception("other")
+    err.code = "content_blocked"
+    assert _is_lyria3_content_blocked(err) is True
+
+    wav_bytes, wav_mime = _extract_lyria3_audio(
+        {
+            "steps": [
+                {
+                    "content": [
+                        {"type": "text", "text": "thinking"},
+                        {
+                            "type": "audio",
+                            "mime_type": "audio/wav",
+                            "data": b"RIFFDATA",
+                        },
+                    ]
+                }
+            ]
+        }
+    )
+    assert wav_bytes == b"RIFFDATA"
+    assert wav_mime == "audio/wav"
+
+    none_bytes, default_mime = _extract_lyria3_audio({"outputs": []})
+    assert none_bytes is None
+    assert default_mime == "audio/mpeg"

@@ -77,18 +77,19 @@ export class HeaderComponent implements OnDestroy {
       this.menuFixed = storedMenuFixed === 'true';
     }
 
+    const iconPath = 'assets/images';
     this.matIconRegistry
       .addSvgIcon(
         'creative-studio-icon',
-        this.setPath(`${this.path}/creative-studio-icon.svg`),
+        this.setPath(`${iconPath}/creative-studio-icon.svg`),
       )
       .addSvgIcon(
         'fun-templates-icon',
-        this.setPath(`${this.path}/fun-templates-icon.svg`),
+        this.setPath(`${iconPath}/fun-templates-icon.svg`),
       )
       .addSvgIcon(
         'audio-generation-icon',
-        this.setPath(`${this.path}/audio-generation-icon.svg`),
+        this.setPath(`${iconPath}/audio-generation-icon.svg`),
       );
 
     this.currentUser = this.userService.getUserDetails();
@@ -105,8 +106,6 @@ export class HeaderComponent implements OnDestroy {
     this.destroy$.next();
     this.destroy$.complete();
   }
-
-  private path = '../../assets/images';
 
   private setPath(url: string): SafeResourceUrl {
     return this.sanitizer.bypassSecurityTrustResourceUrl(url);

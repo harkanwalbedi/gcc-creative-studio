@@ -46,6 +46,16 @@ class UnifiedGalleryItemResponse(BaseModel):
         default_factory=dict, validation_alias="metadata_"
     )
 
+    @field_validator("gcs_uris", "thumbnail_uris", mode="before")
+    @classmethod
+    def filter_none_uris(cls, v: Any) -> list[str]:
+        """Filters None entries out of URI arrays (e.g. external YouTube assets)."""
+        if v is None:
+            return []
+        if isinstance(v, list):
+            return [uri for uri in v if uri is not None]
+        return v
+
     @field_validator("metadata", mode="after")
     @classmethod
     def convert_metadata_keys(cls, v: dict[str, Any]) -> dict[str, Any]:
@@ -70,6 +80,7 @@ class UnifiedGalleryItemResponse(BaseModel):
     # Presigned URLs will be injected by the service
     presigned_urls: list[str] = []
     presigned_thumbnail_urls: list[str] = []
+    master_presigned_urls: list[str] | None = None
 
     # For compatibility with frontend expecting specific fields at top level,
     # we might want to flatten metadata or keep it nested.

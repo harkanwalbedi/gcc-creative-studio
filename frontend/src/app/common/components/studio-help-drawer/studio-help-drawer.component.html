@@ -1,0 +1,311 @@
+<!--
+ Copyright 2026 Google LLC
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
+<!-- Right-side Floating "Help Me" Banner Trigger -->
+@if (!isOpen()) {
+  <button
+    type="button"
+    (click)="toggleDrawer()"
+    aria-label="Help Me - GMP &amp; Tab Guide"
+    class="help-me-trigger fixed right-0 top-1/2 -translate-y-1/2 z-[1050] flex flex-col items-center gap-2 rounded-l-2xl border border-r-0 border-blue-400/40 bg-gradient-to-b from-blue-600/90 via-violet-600/90 to-zinc-900/95 px-2.5 py-4 text-white shadow-2xl backdrop-blur-xl hover:px-3.5 transition-all cursor-pointer"
+  >
+    <mat-icon class="!h-5 !w-5 !text-xl text-white">help_outline</mat-icon>
+    <span class="help-me-vertical-text text-xs font-bold uppercase tracking-widest text-white">
+      Help Me · GMP
+    </span>
+  </button>
+}
+
+<!-- Slide-over Backdrop & Right Drawer -->
+@if (isOpen()) {
+  <div
+    (click)="closeDrawer()"
+    class="fixed inset-0 z-[1090] bg-black/40 backdrop-blur-[2px]"
+  ></div>
+
+  <aside
+    aria-label="Creative Studio Help and GMP Assistant"
+    class="fixed right-0 top-0 bottom-0 z-[1100] w-full max-w-[420px] flex flex-col border-l border-neutral-700/80 bg-neutral-900/95 text-white shadow-2xl backdrop-blur-2xl"
+  >
+    <!-- Drawer Header -->
+    <div class="flex items-center justify-between border-b border-neutral-800 px-5 py-4 bg-gradient-to-r from-blue-950/60 via-violet-950/40 to-neutral-900">
+      <div class="flex items-center gap-2.5">
+        <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-500/20 border border-blue-400/30 text-blue-300">
+          <mat-icon class="!h-5 !w-5 !text-lg">auto_awesome</mat-icon>
+        </div>
+        <div>
+          <div class="text-sm font-bold text-white">Studio &amp; GMP Help</div>
+          <div class="text-[11px] text-neutral-400">
+            Tab overview · GMP configs · Gemini 3 Flash Q&amp;A
+          </div>
+        </div>
+      </div>
+
+      <button
+        type="button"
+        (click)="closeDrawer()"
+        aria-label="Close help panel"
+        class="rounded-lg p-1.5 text-neutral-400 hover:bg-neutral-800 hover:text-white transition-colors"
+      >
+        <mat-icon class="!h-5 !w-5 !text-lg">close</mat-icon>
+      </button>
+    </div>
+
+    <!-- Mode Switcher Tabs -->
+    <div class="grid grid-cols-2 gap-1.5 border-b border-neutral-800 bg-neutral-950/60 p-2">
+      <button
+        type="button"
+        (click)="switchTab('guide')"
+        class="flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-all"
+        [class.bg-blue-600]="activeDrawerTab() === 'guide'"
+        [class.text-white]="activeDrawerTab() === 'guide'"
+        [class.text-neutral-400]="activeDrawerTab() !== 'guide'"
+      >
+        <mat-icon class="!h-4 !w-4 !text-sm">menu_book</mat-icon>
+        <span>Tab &amp; GMP Guide</span>
+      </button>
+      <button
+        type="button"
+        (click)="switchTab('assistant')"
+        class="flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-semibold transition-all"
+        [class.bg-violet-600]="activeDrawerTab() === 'assistant'"
+        [class.text-white]="activeDrawerTab() === 'assistant'"
+        [class.text-neutral-400]="activeDrawerTab() !== 'assistant'"
+      >
+        <mat-icon class="!h-4 !w-4 !text-sm">smart_toy</mat-icon>
+        <span>Ask Gemini 3 Flash</span>
+      </button>
+    </div>
+
+    <!-- ===================================== -->
+    <!-- TAB 1: CONTEXTUAL TAB & GMP GUIDE     -->
+    <!-- ===================================== -->
+    @if (activeDrawerTab() === 'guide') {
+      <div class="flex-1 overflow-y-auto p-4 space-y-4">
+        <!-- Current Tab Overview Card -->
+        @if (activeTabGuide(); as tabGuide) {
+          <div class="rounded-xl border border-neutral-800 bg-neutral-950/70 p-4">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-[10px] font-bold uppercase tracking-wider text-blue-400">
+                Current Tab Overview
+              </span>
+              <span class="rounded bg-neutral-800 px-2 py-0.5 text-[10px] font-mono text-neutral-400">
+                {{ currentRoute() }}
+              </span>
+            </div>
+
+            <div class="mt-2 flex items-center gap-2">
+              <mat-icon class="!h-5 !w-5 !text-lg text-blue-300">{{ tabGuide.icon }}</mat-icon>
+              <h3 class="text-base font-bold text-white !m-0">{{ tabGuide.tabTitle }}</h3>
+            </div>
+            <p class="mt-1 text-xs text-neutral-400">{{ tabGuide.subtitle }}</p>
+
+            @if (currentRoute().startsWith('/video') && activeModelDisplayName()) {
+              <div class="mt-2.5 rounded-lg bg-blue-500/10 border border-blue-500/25 px-3 py-2 text-xs text-blue-200">
+                <strong>Active Selection:</strong> {{ activeModelDisplayName() }}
+                @if (activeVideoMode()) {
+                  <span> · {{ activeVideoMode() }}</span>
+                }
+              </div>
+            }
+
+            <div class="mt-3 space-y-2.5">
+              @for (cap of tabGuide.capabilities; track cap.title) {
+                <div class="rounded-lg bg-neutral-900/90 border border-neutral-800/90 p-2.5">
+                  <div class="text-xs font-semibold text-neutral-100">{{ cap.title }}</div>
+                  <div class="mt-0.5 text-[11px] text-neutral-400 leading-relaxed">
+                    {{ cap.detail }}
+                  </div>
+                </div>
+              }
+            </div>
+          </div>
+        }
+
+        <!-- GMP Model & Config Inspector -->
+        <div class="rounded-xl border border-blue-500/30 bg-gradient-to-b from-blue-950/25 to-neutral-950/80 p-4">
+          <div class="flex items-center justify-between gap-2 mb-2">
+            <span class="text-[10px] font-bold uppercase tracking-wider text-violet-300">
+              GMP Model &amp; Config Reference
+            </span>
+            <button
+              type="button"
+              (click)="goToGmpHub()"
+              class="text-[11px] font-semibold text-blue-300 hover:text-blue-200 underline"
+            >
+              Open Full GMP Tab →
+            </button>
+          </div>
+
+          <label for="gmpInspectorSelect" class="block text-[11px] text-neutral-400 mb-1">
+            Inspect GMP Capability:
+          </label>
+          <select
+            id="gmpInspectorSelect"
+            [value]="inspectedGmpFeature().id"
+            (change)="selectGmpInspector($event)"
+            class="w-full rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 text-xs text-white focus:border-blue-500 focus:outline-none"
+          >
+            @for (feat of gmpFeatures; track feat.id) {
+              <option [value]="feat.id">{{ feat.title }} ({{ feat.modelValue }})</option>
+            }
+          </select>
+
+          @if (inspectedGmpFeature(); as feat) {
+            <div class="mt-3 space-y-2.5">
+              <p class="text-xs text-neutral-300 leading-relaxed !m-0">
+                {{ feat.summary }}
+              </p>
+
+              <div class="flex flex-wrap gap-1">
+                @for (m of feat.supportedModes; track m) {
+                  <span class="rounded bg-blue-500/20 px-2 py-0.5 text-[10px] font-medium text-blue-200">
+                    {{ m }}
+                  </span>
+                }
+              </div>
+
+              <div>
+                <div class="text-[10px] font-semibold uppercase tracking-wider text-neutral-400 mb-1">
+                  Inputs &amp; Constraints
+                </div>
+                <ul class="list-disc pl-4 space-y-1 text-[11px] text-neutral-300 m-0">
+                  @for (item of feat.inputsAndSpecs; track item) {
+                    <li>{{ item }}</li>
+                  }
+                </ul>
+              </div>
+
+              <div>
+                <div class="text-[10px] font-semibold uppercase tracking-wider text-neutral-400 mb-1">
+                  Configs &amp; Parameters
+                </div>
+                <ul class="list-disc pl-4 space-y-1 text-[11px] text-neutral-300 m-0">
+                  @for (cfg of feat.keyConfigs; track cfg) {
+                    <li>{{ cfg }}</li>
+                  }
+                </ul>
+              </div>
+
+              <button
+                type="button"
+                (click)="launchInspectedModel(feat)"
+                class="mt-2 w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 px-3 py-2 text-xs font-semibold text-white transition-colors"
+              >
+                <span>{{ feat.launchRoute === '/gallery' ? 'Go to Gallery to Upscale' : 'Try ' + feat.title + ' in Studio' }}</span>
+                <mat-icon class="!h-4 !w-4 !text-sm">open_in_new</mat-icon>
+              </button>
+            </div>
+          }
+        </div>
+
+        <!-- Quick Questions for Current Tab -->
+        @if (activeTabGuide(); as tabGuide) {
+          <div class="rounded-xl border border-neutral-800 bg-neutral-950/70 p-4">
+            <div class="text-[10px] font-bold uppercase tracking-wider text-neutral-400 mb-2">
+              Quick Questions for This Tab
+            </div>
+            <div class="flex flex-col gap-1.5">
+              @for (q of tabGuide.suggestedQuestions; track q) {
+                <button
+                  type="button"
+                  (click)="submitQuestion(q)"
+                  class="text-left rounded-lg bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 px-3 py-2 text-xs text-neutral-200 transition-colors flex items-center justify-between gap-2"
+                >
+                  <span>{{ q }}</span>
+                  <mat-icon class="!h-4 !w-4 !text-sm text-violet-400 flex-shrink-0">send</mat-icon>
+                </button>
+              }
+            </div>
+          </div>
+        }
+      </div>
+    }
+
+    <!-- ===================================== -->
+    <!-- TAB 2: GEMINI 3 FLASH ASSISTANT CHAT  -->
+    <!-- ===================================== -->
+    @if (activeDrawerTab() === 'assistant') {
+      <div class="flex-1 flex flex-col min-h-0">
+        <!-- Messages List -->
+        <div class="flex-1 overflow-y-auto p-4 space-y-3">
+          @for (msg of messages(); track $index) {
+            <div
+              class="rounded-xl px-3.5 py-2.5 text-xs leading-relaxed border"
+              [ngClass]="
+                msg.role === 'user'
+                  ? 'bg-blue-600/25 border-blue-500/30 ml-6'
+                  : 'bg-neutral-950/90 border-neutral-800 mr-3'
+              "
+            >
+              <div class="flex items-center justify-between text-[10px] text-neutral-400 mb-1">
+                <span class="font-semibold uppercase tracking-wider">
+                  {{ msg.role === 'user' ? 'You' : 'Studio Guide' }}
+                </span>
+                @if (msg.modelUsed) {
+                  <span class="font-mono text-[9px] text-violet-300">{{ msg.modelUsed }}</span>
+                }
+              </div>
+              <div class="assistant-markdown text-neutral-200">
+                <markdown [data]="msg.content"></markdown>
+              </div>
+            </div>
+          }
+
+          @if (isAsking()) {
+            <div class="rounded-xl bg-neutral-950/90 border border-neutral-800 px-3.5 py-3 mr-3 flex items-center gap-2.5 text-xs text-neutral-300">
+              <mat-progress-spinner mode="indeterminate" [diameter]="16"></mat-progress-spinner>
+              <span>Gemini 3 Flash is thinking...</span>
+            </div>
+          }
+        </div>
+
+        <!-- Suggested Chips + Input Box -->
+        <div class="border-t border-neutral-800 bg-neutral-950/90 p-3 space-y-2">
+          <div class="flex items-center justify-between text-[10px] text-neutral-400">
+            <span>Context: <code class="text-blue-300">{{ currentRoute() }}</code></span>
+            <button
+              type="button"
+              (click)="clearChat()"
+              class="text-neutral-400 hover:text-white underline"
+            >
+              Clear chat
+            </button>
+          </div>
+
+          <div class="flex items-end gap-2">
+            <textarea
+              rows="2"
+              [value]="draftQuestion()"
+              (input)="onQuestionInput($event)"
+              (keydown)="onEnterKey($event)"
+              placeholder="Ask about GMP models, Blue Mesh, 4K upscale, or current tab settings..."
+              class="flex-1 resize-none rounded-xl bg-neutral-900 border border-neutral-700 px-3 py-2 text-xs text-white placeholder-neutral-500 focus:border-violet-500 focus:outline-none"
+            ></textarea>
+            <button
+              type="button"
+              (click)="submitQuestion()"
+              [disabled]="isAsking() || !draftQuestion().trim()"
+              class="flex h-9 w-9 items-center justify-center rounded-xl bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed text-white flex-shrink-0 transition-colors"
+            >
+              <mat-icon class="!h-4 !w-4 !text-base">send</mat-icon>
+            </button>
+          </div>
+        </div>
+      </div>
+    }
+  </aside>
+}

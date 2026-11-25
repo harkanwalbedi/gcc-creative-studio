@@ -29,6 +29,7 @@ import {ActivatedRoute, Router} from '@angular/router';
 import {MediaLightboxComponent} from './media-lightbox.component';
 import {StudioButtonComponent} from '../studio-button/studio-button.component';
 import {MediaItem} from '../../models/media-item.model';
+import {SafeUrlPipe} from '../../pipes/safe-url.pipe';
 import {TagsService} from '../../services/tags.service';
 import {WorkspaceStateService} from '../../../services/workspace/workspace-state.service';
 
@@ -40,6 +41,7 @@ const TAGS = 'label';
 const OMNI = 'layers Edit with Omni';
 const EXTEND = 'auto_awesome Extend';
 const CONCATENATE = 'add_to_photos Concatenate';
+const UPSCALE = 'hd Upscale';
 
 describe('MediaLightboxComponent', () => {
   let component: MediaLightboxComponent;
@@ -69,6 +71,7 @@ describe('MediaLightboxComponent', () => {
    */
   function show(item: MediaItem): void {
     component.mediaItem = item;
+    component.selectedUrl = item.presignedUrls?.[0];
     fixture.detectChanges();
   }
 
@@ -86,7 +89,12 @@ describe('MediaLightboxComponent', () => {
   beforeEach(async () => {
     await TestBed.configureTestingModule({
       declarations: [MediaLightboxComponent, StudioButtonComponent],
-      imports: [MatMenuModule, MatTooltipModule, NoopAnimationsModule],
+      imports: [
+        MatMenuModule,
+        MatTooltipModule,
+        NoopAnimationsModule,
+        SafeUrlPipe,
+      ],
       providers: [
         {provide: Clipboard, useValue: {copy: jasmine.createSpy('copy')}},
         {provide: MatSnackBar, useValue: {open: jasmine.createSpy('open')}},
@@ -143,6 +151,25 @@ describe('MediaLightboxComponent', () => {
         .withContext(label)
         .toBeFalse();
     }
+  });
+
+  it('renders YouTube embed iframe and hides video remix and upscale actions for YouTube items', () => {
+    component.showOmniButton = true;
+    component.showExtendButton = true;
+    component.showConcatenateButton = true;
+    component.showUpscaleButton = true;
+    show({
+      ...videoItem(['https://www.youtube.com/watch?v=dQw4w9WgXcQ']),
+      presignedUrls: ['https://www.youtube.com/watch?v=dQw4w9WgXcQ'],
+      metadata: {assetType: 'youtube_video'},
+    } as MediaItem);
+
+    expect(fixture.debugElement.query(By.css('iframe'))).toBeTruthy();
+    expect(fixture.debugElement.query(By.css('video'))).toBeNull();
+    expect(actionButton(OMNI)).toBeUndefined();
+    expect(actionButton(EXTEND)).toBeUndefined();
+    expect(actionButton(CONCATENATE)).toBeUndefined();
+    expect(actionButton(UPSCALE)).toBeUndefined();
   });
 
   it('offers no image action to a host that wired none up', () => {
@@ -202,5 +229,34 @@ describe('MediaLightboxComponent', () => {
     show(imageItem());
 
     expect(actionButton(TAGS)).toBeUndefined();
+  });
+
+  it('shows Download ProRes (.mov) when masterPresignedUrls has a ProRes master', () => {
+    show({
+      ...videoItem(),
+      masterPresignedUrls: ['https://storage.test/master_0.mov'],
+      rawData: {output_codec: 'prores'},
+    });
+
+    expect(component.masterDownloadUrl).toBe(
+      'https://storage.test/master_0.mov',
+    );
+    expect(component.masterFormatLabel).toBe('ProRes (.mov)');
+    expect(
+      actionButton('high_quality Download ProRes (.mov)'),
+    ).toBeDefined();
+  });
+
+  it('shows Download DNxHR (.mxf) when masterPresignedUrls has a DNxHR master', () => {
+    show({
+      ...videoItem(),
+      masterPresignedUrls: ['https://storage.test/master_0.mxf'],
+      rawData: {output_codec: 'dnxhr'},
+    });
+
+    expect(component.masterFormatLabel).toBe('DNxHR (.mxf)');
+    expect(
+      actionButton('high_quality Download DNxHR (.mxf)'),
+    ).toBeDefined();
   });
 });

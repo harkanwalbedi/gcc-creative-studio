@@ -35,11 +35,13 @@ export interface BaseGalleryItem {
   // Unified arrays
   gcsUris?: string[];
   originalGcsUris?: string[];
+  masterGcsUris?: string[];
   thumbnailUris?: string[];
 
   // Presigned URLs (injected by service)
   presignedUrls?: string[];
   originalPresignedUrls?: string[];
+  masterPresignedUrls?: string[];
   presignedThumbnailUrls?: string[];
 
   errorMessage?: string;

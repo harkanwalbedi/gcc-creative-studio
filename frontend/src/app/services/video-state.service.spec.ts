@@ -53,7 +53,7 @@ describe('VideoStateService', () => {
     const state = service.getState();
     expect(state.prompt).toBe('');
     expect(state.aspectRatio).toBe('16:9');
-    expect(state.model).toBe('gemini-omni-1.1-flash-preview');
+    expect(state.model).toBe('gemini-omni-1.2-flash');
     expect(state.numberOfMedia).toBe(1);
   });
 
@@ -215,13 +215,13 @@ describe('VideoStateService model capability guards', () => {
   }
 
   it('resets a persisted mode the restored model cannot support', () => {
-    // Omni cannot extend video. Without a guard this pairing is restored
-    // verbatim and the request is then rejected by the backend.
+    // Omni 1.2 does not support Concatenate Video. Without a guard this pairing
+    // would be restored verbatim and rejected by the backend.
     localStorage.setItem(
       'video_state',
       JSON.stringify({
-        model: 'gemini-omni-flash-preview',
-        mode: 'Extend Video',
+        model: 'gemini-omni-1.2-flash',
+        mode: 'Concatenate Video',
       }),
     );
 
@@ -230,17 +230,18 @@ describe('VideoStateService model capability guards', () => {
     expect(service.getState().mode).toBe('Text to Video');
   });
 
-  it('keeps a persisted mode the restored model does support', () => {
+  it('migrates deprecated Gemini Omni 1.1 state to Gemini Omni 1.2 Flash', () => {
     localStorage.setItem(
       'video_state',
       JSON.stringify({
-        model: 'gemini-omni-flash-preview',
+        model: 'gemini-omni-1.1-flash',
         mode: 'Ingredients to Video',
       }),
     );
 
     initService();
 
+    expect(service.getState().model).toBe('gemini-omni-1.2-flash');
     expect(service.getState().mode).toBe('Ingredients to Video');
   });
 
@@ -262,7 +263,7 @@ describe('VideoStateService model capability guards', () => {
     localStorage.setItem(
       'video_state',
       JSON.stringify({
-        model: 'gemini-omni-flash-preview',
+        model: 'gemini-omni-1.2-flash',
         mode: 'Edit Video',
         editSource: {id: 42, type: 'media_item', index: 1, previewUrl: 'p'},
       }),
@@ -280,7 +281,7 @@ describe('VideoStateService model capability guards', () => {
     localStorage.setItem(
       'video_state',
       JSON.stringify({
-        model: 'gemini-omni-flash-preview',
+        model: 'gemini-omni-1.2-flash',
         mode: 'Edit Video',
       }),
     );

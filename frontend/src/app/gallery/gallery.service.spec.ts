@@ -74,5 +74,27 @@ describe('GalleryService', () => {
 
       expect(result.duration).toBe(4);
     });
+
+    it('maps masterPresignedUrls from camelCase or snake_case', () => {
+      const camelResult = service.mapUnifiedItem({
+        id: 5,
+        itemType: 'media_item',
+        masterPresignedUrls: ['https://storage.test/master_0.mov'],
+      });
+      const snakeResult = service.mapUnifiedItem({
+        id: 6,
+        itemType: 'media_item',
+        master_presigned_urls: ['https://storage.test/master_0.mxf'],
+        raw_data: {output_codec: 'dnxhr'},
+      });
+
+      expect(camelResult.masterPresignedUrls).toEqual([
+        'https://storage.test/master_0.mov',
+      ]);
+      expect(snakeResult.masterPresignedUrls).toEqual([
+        'https://storage.test/master_0.mxf',
+      ]);
+      expect(snakeResult.rawData).toEqual({output_codec: 'dnxhr'});
+    });
   });
 });

@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi import status as Status
 
 from src.auth.auth_guard import RoleChecker, get_current_user
+from src.common.base_dto import GenerationModelEnum
 from src.galleries.dto.gallery_response_dto import MediaItemResponse
 from src.users.user_model import UserModel, UserRoleEnum
 from src.videos.dto.concatenate_videos_dto import ConcatenateVideosDto
@@ -26,6 +27,17 @@ from src.workspaces.workspace_auth_guard import WorkspaceAuth
 # Define role checkers for convenience
 user_only = Depends(
     RoleChecker(allowed_roles=[UserRoleEnum.USER, UserRoleEnum.ADMIN])
+)
+
+_VPE_MODELS = frozenset(
+    {
+        GenerationModelEnum.VEO_EXP_A2V_GENERATION,
+        GenerationModelEnum.VEO_EXP_VIDEO_TRANSFORM,
+        GenerationModelEnum.VEO_EXP_PERF_ESTIMATION,
+        GenerationModelEnum.OMNI_PERF,
+        GenerationModelEnum.OMNI_CINE,
+        GenerationModelEnum.VEO_EXP_VIDEO_TEXTURES,
+    }
 )
 
 router = APIRouter(
@@ -52,13 +64,18 @@ async def generate_videos(
             user=current_user,
         )
 
-        # Get the executor from the app state
-        executor = request.app.state.executor
+        # Route GMP / VPE models to vpe_executor so long-running jobs never
+        # saturate the shared four-worker general pool.
+        executor = (
+            getattr(request.app.state, "vpe_executor", None)
+            if video_request.generation_model in _VPE_MODELS
+            else None
+        ) or request.app.state.executor
 
         return await service.start_video_generation_job(
             request_dto=video_request,
             user=current_user,
-            executor=executor,  # Pass the pool to the service
+            executor=executor,
         )
     except HTTPException as http_exception:
         raise http_exception

@@ -62,6 +62,10 @@ async def upload_source_asset(
     assetType: AssetTypeEnum | None = Form(None),
     aspectRatio: AspectRatioEnum | None = Form(None),
     upscaleFactor: str | None = Form(None),
+    enhance_input_image: bool | None = Form(None),
+    enhanceInputImage: bool | None = Form(None),
+    image_preservation_factor: float | None = Form(None),
+    imagePreservationFactor: float | None = Form(None),
     current_user: UserModel = Depends(get_current_user),
     service: SourceAssetService = Depends(SourceAssetService),
     workspace_auth: WorkspaceAuth = Depends(),
@@ -80,6 +84,17 @@ async def upload_source_asset(
         user=current_user,
     )
 
+    effective_enhance = (
+        enhance_input_image
+        if enhance_input_image is not None
+        else enhanceInputImage
+    )
+    effective_preservation = (
+        image_preservation_factor
+        if image_preservation_factor is not None
+        else imagePreservationFactor
+    )
+
     contents = await file.read()
     return await service.upload_asset(
         user=current_user,
@@ -91,6 +106,8 @@ async def upload_source_asset(
         asset_type=assetType,
         aspect_ratio=aspectRatio,
         upscale_factor=upscaleFactor,
+        enhance_input_image=effective_enhance,
+        image_preservation_factor=effective_preservation,
     )
 
 

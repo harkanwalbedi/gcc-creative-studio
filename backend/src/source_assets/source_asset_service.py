@@ -146,6 +146,30 @@ class SourceAssetService:
         user_email: str | None = None,
     ) -> SourceAssetResponseDto:
         """Generates presigned URLs for the asset and its thumbnail."""
+        if not asset.gcs_uri:
+            from src.common.media_utils import extract_youtube_video_id
+
+            presigned_url = asset.external_url or ""
+            presigned_thumbnail_url = ""
+            if asset.thumbnail_gcs_uri:
+                presigned_thumbnail_url = await asyncio.to_thread(
+                    self.iam_signer.generate_presigned_url,
+                    asset.thumbnail_gcs_uri,
+                )
+            elif asset.external_url:
+                video_id = extract_youtube_video_id(asset.external_url)
+                if video_id:
+                    presigned_thumbnail_url = (
+                        f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
+                    )
+            return SourceAssetResponseDto(
+                **asset.model_dump(),
+                presigned_url=presigned_url,
+                presigned_original_url="",
+                presigned_thumbnail_url=presigned_thumbnail_url,
+                user_email=user_email,
+            )
+
         tasks = [
             asyncio.to_thread(
                 self.iam_signer.generate_presigned_url, asset.gcs_uri
@@ -353,7 +377,9 @@ class SourceAssetService:
                             user_image=original_gcs_uri,
                             upscale_factor=upscale_factor,
                             mime_type=MimeTypeEnum.IMAGE_PNG,
-                            generation_model=GenerationModelEnum.IMAGEN_4_UPSCALE_PREVIEW,
+                            generation_model=(
+                                GenerationModelEnum.GEMINI_3_1_FLASH_IMAGE
+                            ),
                             enhance_input_image=enhance_input_image or False,
                             image_preservation_factor=image_preservation_factor,
                         )

@@ -100,8 +100,15 @@ class WorkflowService:
             step_name = step.step_id
             config = step.settings if step.settings else {}
             config = (
-                config.model_dump() if isinstance(config, BaseModel) else config
+                config.model_dump()
+                if isinstance(config, BaseModel)
+                else dict(config)
             )
+            if (
+                step_type == NodeTypes.GENERATE_IMAGE.value
+                and config.get("aspect_ratio") == "auto"
+            ):
+                config["aspect_ratio"] = "1:1"
 
             # Resolve inputs
             resolved_inputs = {}

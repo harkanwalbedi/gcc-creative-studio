@@ -119,19 +119,30 @@ export class StepMediaInputComponent implements OnInit {
           let newItem: ReferenceImage | null = null;
 
           if ('gcsUri' in res) {
+            const previewUrl =
+              this.type === 'video'
+                ? res.presignedThumbnailUrl || ''
+                : res.presignedUrl || '';
             newItem = {
               sourceAssetId: res.id,
-              previewUrl: res.presignedUrl || '',
+              previewUrl,
             };
           } else {
-            const previewUrl = res.mediaItem.presignedUrls?.[res.selectedIndex];
-            if (previewUrl) {
+            const previewUrl =
+              this.type === 'video'
+                ? res.mediaItem.presignedThumbnailUrls?.[res.selectedIndex] ||
+                  ''
+                : res.mediaItem.presignedUrls?.[res.selectedIndex];
+            if (previewUrl !== undefined) {
               newItem = {
-                previewUrl: previewUrl,
+                previewUrl: previewUrl || '',
                 sourceMediaItem: {
                   mediaItemId: res.mediaItem.id,
                   mediaIndex: res.selectedIndex,
-                  role: 'image_reference_asset',
+                  role:
+                    this.type === 'video'
+                      ? 'video_reference'
+                      : 'image_reference_asset',
                 },
               };
             }

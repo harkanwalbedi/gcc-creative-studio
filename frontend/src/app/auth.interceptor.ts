@@ -35,6 +35,15 @@ export class AuthInterceptor implements HttpInterceptor {
     request: HttpRequest<unknown>,
     next: HttpHandler,
   ): Observable<HttpEvent<unknown>> {
+    const isStaticAsset =
+      request.url.includes('assets/') || request.url.endsWith('.svg');
+    const isAuthDisabled = Boolean(
+      (environment as {authDisabled?: boolean}).authDisabled,
+    );
+    if (isStaticAsset || isAuthDisabled) {
+      return next.handle(request);
+    }
+
     // Asynchronously get a valid token. This will use the cache or trigger a silent refresh.
     return this.authService.getValidIdentityPlatformToken$().pipe(
       switchMap(token => {

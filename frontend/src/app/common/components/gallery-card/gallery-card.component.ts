@@ -80,6 +80,21 @@ export class GalleryCardComponent implements OnDestroy {
     return this.item.presignedUrls || [];
   }
 
+  get hasThumbnail(): boolean {
+    return (
+      !!this.item.presignedThumbnailUrls &&
+      this.item.presignedThumbnailUrls.length > 0
+    );
+  }
+
+  get isYoutubeVideo(): boolean {
+    const meta = this.item?.metadata as any;
+    return (
+      meta?.assetType === 'youtube_video' ||
+      meta?.asset_type === 'youtube_video'
+    );
+  }
+
   get displayPaddingBottom(): string {
     const rawRatio =
       this.item.aspectRatio ||

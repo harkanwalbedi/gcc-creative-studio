@@ -13,10 +13,9 @@
 # limitations under the License.
 """Base Data Transfer Object classes."""
 
-
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 
@@ -45,7 +44,6 @@ class GenerationModelEnum(str, Enum):
     """Enum representing the available generation models."""
 
     # Image-Specific Models
-    IMAGEN_4_UPSCALE_PREVIEW = "imagen-4.0-upscale-preview"
     GEMINI_2_5_PRO = "gemini-2.5-pro"
     GEMINI_2_5_FLASH = "gemini-2.5-flash"
     GEMINI_2_5_FLASH_IMAGE_PREVIEW = "gemini-2.5-flash-image-preview"
@@ -58,11 +56,25 @@ class GenerationModelEnum(str, Enum):
     VTO = "virtual-try-on-001"
 
     # Video-Specific Models
+    GEMINI_OMNI_1_2_FLASH = "gemini-omni-1.2-flash"
     GEMINI_OMNI_1_1_FLASH = "gemini-omni-1.1-flash"
     GEMINI_OMNI_1_1_FLASH_PREVIEW = "gemini-omni-1.1-flash-preview"
     GEMINI_OMNI_FLASH_PREVIEW = "gemini-omni-flash-preview"
+    VEO_EXP_A2V_GENERATION = "veo-exp-a2v-generation"
+    VEO_EXP_VIDEO_TRANSFORM = "veo-exp-video-transform"
+    VEO_EXP_SUPER_RES = "veo-exp-super-res"
+    VEO_EXP_PERF_ESTIMATION = "veo-exp-perf-estimation"
+    OMNI_PERF = "omni-perf"
+    OMNI_CINE = "omni-cine"
+    VEO_EXP_VIDEO_TEXTURES = "veo-exp-video-textures"
+    # A VPE checkpoint, not a publisher model. Every VPE capability is reached
+    # through the one "veo-experimental" endpoint and chosen by this name
+    # inside the payload, so the checkpoint is what identifies the model that
+    # actually produced a row; "veo-experimental" would name eight of them.
+    VEO_3_1_UPSCALE = "veo3p1_upscale"
     VEO_3_1_FAST_GENERATE_001 = "veo-3.1-fast-generate-001"
     VEO_3_1_LITE_GENERATE_001 = "veo-3.1-lite-generate-001"
+    VEO_3_1_LITE_PREVIEW = "veo-3.1-lite-generate-preview"
     VEO_3_1_GENERATE_001 = "veo-3.1-generate-001"
     VEO_3_1_PREVIEW = "veo-3.1-generate-preview"
     VEO_3_FAST = "veo-3.0-fast-generate-001"
@@ -71,12 +83,17 @@ class GenerationModelEnum(str, Enum):
     VEO_3_QUALITY_PREVIEW = "veo-3.0-generate-preview"
     # Audio-Specific Models
     LYRIA_002 = "lyria-002"
+    LYRIA_3_CLIP_PREVIEW = "lyria-3-clip-preview"
+    LYRIA_3_PRO_PREVIEW = "lyria-3-pro-preview"
     CHIRP_3 = "chirp_3"
     GEMINI_2_5_FLASH_TTS = "gemini-2.5-flash-tts"
     GEMINI_2_5_FLASH_LITE_PREVIEW_TTS = "gemini-2.5-flash-lite-preview-tts"
     GEMINI_2_5_PRO_TTS = "gemini-2.5-pro-tts"
+    GEMINI_3_1_FLASH_TTS_PREVIEW = "gemini-3.1-flash-tts-preview"
 
     # Deprecated models (For old generations only, do not use)
+    _DEPRECATED_VEO_EXP_PERF_GENERATION = "veo-exp-perf-generation"
+    IMAGEN_4_UPSCALE_PREVIEW = "imagen-4.0-upscale-preview"
     _DEPRECATED_VTO = "virtual-try-on-preview-08-04"
     # Never resolved on Vertex: the Interactions API answers
     # "Unsupported model interaction: gemini-omni-generate-preview". Kept only
@@ -193,6 +210,7 @@ class AspectRatioEnum(str, Enum):
     RATIO_4_1 = "4:1"
     RATIO_1_8 = "1:8"
     RATIO_8_1 = "8:1"
+    AUTO = "auto"
     OTHER = "other"
 
 
@@ -267,3 +285,11 @@ class BaseDto(BaseModel):
         populate_by_name=True,
         from_attributes=True,
     )
+
+
+class AssetReferenceDto(BaseDto):
+    """References either a SourceAsset or a MediaItem by ID, type, and index."""
+
+    id: int
+    type: str
+    index: int | None = Field(default=0, ge=0)

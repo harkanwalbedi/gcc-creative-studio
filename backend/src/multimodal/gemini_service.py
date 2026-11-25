@@ -41,6 +41,10 @@ from src.config.config_service import config_service
 from src.images.dto.create_imagen_dto import CreateImagenDto
 from src.multimodal.dto.create_prompt_imagen_dto import CreatePromptImageDto
 from src.multimodal.dto.create_prompt_video_dto import CreatePromptVideoDto
+from src.multimodal.dto.studio_assistant_dto import (
+    StudioAssistantRequestDto,
+    StudioAssistantResponseDto,
+)
 from src.multimodal.rewriters import (
     RANDOM_IMAGE_PROMPT_TEMPLATE,
     RANDOM_VIDEO_PROMPT_TEMPLATE,
@@ -50,6 +54,7 @@ from src.multimodal.rewriters import (
     REWRITE_VIDEO_TEXT_PROMPT_TEMPLATE,
 )
 from src.multimodal.schema.gemini_model_setup import GeminiModelSetup
+from src.multimodal.studio_knowledge import build_studio_system_instruction
 from src.videos.dto.create_veo_dto import CreateVeoDto
 
 logger = logging.getLogger(__name__)
@@ -500,3 +505,76 @@ class GeminiService:
                 "Failed to aggregate brand info summaries with Gemini: %s", e
             )
             return None
+
+    def answer_studio_question(
+        self, request: StudioAssistantRequestDto
+    ) -> StudioAssistantResponseDto:
+        """Answers a Creative Studio / GMP question using Gemini 3 Flash."""
+        system_instruction = build_studio_system_instruction(
+            bool(self.cfg.VPE_ENABLED)
+        )
+        active_model = request.active_model or "default"
+        active_mode = request.active_mode or "default"
+        ui_context = (
+            f"[Active UI Context — Route: `{request.current_route}`"
+            f" | Selected Model: `{active_model}`"
+            f" | Selected Mode: `{active_mode}`]\n\n"
+        )
+
+        contents: list[types.Content] = []
+        for msg in request.history[-10:]:
+            role = "model" if msg.role == "assistant" else "user"
+            contents.append(
+                types.Content(
+                    role=role,
+                    parts=[types.Part.from_text(text=msg.content)],
+                )
+            )
+        contents.append(
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_text(text=f"{ui_context}{request.question}")
+                ],
+            )
+        )
+
+        gen_config = types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            temperature=0.2,
+            max_output_tokens=1200,
+        )
+        client = GeminiModelSetup.get_global_client()
+        candidate_models = [self.cfg.STUDIO_ASSISTANT_MODEL_ID]
+        if "gemini-2.5-flash" not in candidate_models:
+            candidate_models.append("gemini-2.5-flash")
+
+        last_error: Exception | None = None
+        for model_id in candidate_models:
+            try:
+                response = client.models.generate_content(
+                    model=model_id,
+                    contents=contents,
+                    config=gen_config,
+                )
+                answer_text = (response.text or "").strip()
+                if not answer_text:
+                    answer_text = (
+                        "I couldn't generate a response for that question. "
+                        "Please try rephrasing it."
+                    )
+                return StudioAssistantResponseDto(
+                    answer=answer_text,
+                    model_used=model_id,
+                )
+            except Exception as err:  # pylint: disable=broad-exception-caught
+                logger.warning(
+                    "Studio Assistant call with model '%s' failed: %s",
+                    model_id,
+                    err,
+                )
+                last_error = err
+
+        raise RuntimeError(
+            f"All assistant models failed: {last_error}"
+        ) from last_error

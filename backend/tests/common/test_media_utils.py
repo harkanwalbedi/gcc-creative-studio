@@ -13,7 +13,6 @@
 # limitations under the License.
 """Tests for Media Utils."""
 
-
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -261,3 +260,58 @@ def test_get_video_metadata_returns_none_when_the_file_cannot_be_probed():
             stderr="error",
         )
         assert get_video_metadata("/tmp/missing.mp4") is None
+
+
+def test_extract_youtube_video_id_and_aspect_ratio():
+    from src.common.media_utils import (
+        extract_youtube_video_id,
+        get_youtube_aspect_ratio,
+    )
+
+    assert (
+        extract_youtube_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        == "dQw4w9WgXcQ"
+    )
+    assert (
+        extract_youtube_video_id("https://youtu.be/dQw4w9WgXcQ?t=12")
+        == "dQw4w9WgXcQ"
+    )
+    assert (
+        extract_youtube_video_id("https://www.youtube.com/shorts/AbCdEfGh123")
+        == "AbCdEfGh123"
+    )
+    assert (
+        extract_youtube_video_id(
+            "https://www.youtube-nocookie.com/embed/AbCdEfGh123"
+        )
+        == "AbCdEfGh123"
+    )
+    assert (
+        extract_youtube_video_id("https://m.youtube.com/live/AbCdEfGh123")
+        == "AbCdEfGh123"
+    )
+    # Reject spoofed domains, bad schemes, wrong ID lengths, and empty values
+    assert extract_youtube_video_id(None) is None
+    assert extract_youtube_video_id("   ") is None
+    assert (
+        extract_youtube_video_id("ftp://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        is None
+    )
+    assert (
+        extract_youtube_video_id("https://notyoutube.com/watch?v=dQw4w9WgXcQ")
+        is None
+    )
+    assert (
+        extract_youtube_video_id("https://www.youtube.com/watch?v=short")
+        is None
+    )
+
+    assert (
+        get_youtube_aspect_ratio("https://www.youtube.com/shorts/AbCdEfGh123")
+        == "9:16"
+    )
+    assert (
+        get_youtube_aspect_ratio("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        == "16:9"
+    )
+    assert get_youtube_aspect_ratio(None) == "16:9"

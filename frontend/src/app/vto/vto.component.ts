@@ -153,9 +153,10 @@ export class VtoComponent implements OnInit, AfterViewInit {
     private galleryService: GalleryService,
   ) {
     this.activeVtoJob$ = this.searchService.activeVtoJob$;
+    const iconPath = 'assets/images';
     this.matIconRegistry.addSvgIcon(
       'mobile-white-gemini-spark-icon',
-      this.setPath(`${this.path}/mobile-white-gemini-spark-icon.svg`),
+      this.setPath(`${iconPath}/mobile-white-gemini-spark-icon.svg`),
     );
 
     this.firstFormGroup = this._formBuilder.group({
@@ -288,8 +289,6 @@ export class VtoComponent implements OnInit, AfterViewInit {
       this.cdr.detectChanges();
     }
   }
-
-  private path = '../../assets/images';
 
   private setPath(url: string): SafeResourceUrl {
     return this.sanitizer.bypassSecurityTrustResourceUrl(url);

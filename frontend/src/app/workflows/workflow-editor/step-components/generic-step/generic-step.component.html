@@ -54,7 +54,7 @@
           [mode]="inputModes[input.name]"
           [compatibleOutputs]="compatibleOutputs[input.name]"
           [showValidationErrors]="showValidationErrors"
-          [maxMediaItems]="currentMaxReferenceImages"
+          [maxMediaItems]="getMaxMediaItems(input)"
           (modeChange)="toggleInputMode(input.name, $event)">
         </app-step-input-field>
       </ng-container>

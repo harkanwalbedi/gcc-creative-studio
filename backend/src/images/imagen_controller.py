@@ -13,7 +13,6 @@
 # limitations under the License.
 """API endpoints for image generation."""
 
-
 from fastapi import (
     APIRouter,
     Depends,
@@ -144,22 +143,32 @@ async def upload_upscale(
     upscale_factor: str | None = Form(None, alias="upscaleFactor"),
     file_hash: str | None = Form(None, alias="fileHash"),
     asset_type: AssetTypeEnum | None = Form(None, alias="assetType"),
-    enhance_input_image: bool | None = Form(None, alias="enhance_input_image"),
-    image_preservation_factor: float | None = Form(
-        None,
-        alias="image_preservation_factor",
-    ),
+    enhance_input_image: bool | None = Form(None),
+    enhanceInputImage: bool | None = Form(None),
+    image_preservation_factor: float | None = Form(None),
+    imagePreservationFactor: float | None = Form(None),
     current_user: UserModel = Depends(get_current_user),
     service: ImagenService = Depends(),
     workspace_auth: WorkspaceAuth = Depends(),
 ) -> MediaItemResponse:
-
+    _ = (original_filename, file_hash)
     file_bytes = None
     filename = None
     if file:
         file_bytes = await file.read()
         filename = file.filename
     await workspace_auth.authorize(workspace_id=workspace_id, user=current_user)
+
+    effective_enhance = (
+        enhance_input_image
+        if enhance_input_image is not None
+        else enhanceInputImage
+    )
+    effective_preservation = (
+        image_preservation_factor
+        if image_preservation_factor is not None
+        else imagePreservationFactor
+    )
 
     executor = request.app.state.executor
 
@@ -177,8 +186,8 @@ async def upload_upscale(
         filename=filename,
         scope=scope,
         mime_type=mime_type,
-        enhance_input_image=enhance_input_image,
-        image_preservation_factor=image_preservation_factor,
+        enhance_input_image=effective_enhance,
+        image_preservation_factor=effective_preservation,
     )
 
 

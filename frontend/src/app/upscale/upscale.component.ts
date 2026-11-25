@@ -80,16 +80,15 @@ export class UpscaleComponent implements OnInit, OnDestroy {
     public matIconRegistry: MatIconRegistry,
     private sanitizer: DomSanitizer,
   ) {
+    const iconPath = 'assets/images';
     this.matIconRegistry.addSvgIcon(
       'mobile-white-gemini-spark-icon',
-      this.setPath(`${this.path}/mobile-white-gemini-spark-icon.svg`),
+      this.setPath(`${iconPath}/mobile-white-gemini-spark-icon.svg`),
     );
 
     // Initialize the combined job stream
     this.activeUpscaleJob$ = this.sourceAssetService.activeUpscaleJob$;
   }
-
-  private path = '../../assets/images';
 
   private setPath(url: string): SafeResourceUrl {
     return this.sanitizer.bypassSecurityTrustResourceUrl(url);
@@ -190,14 +189,68 @@ export class UpscaleComponent implements OnInit, OnDestroy {
       },
     });
 
-    dialogRef.afterClosed().subscribe(result => {
+    dialogRef.afterClosed().subscribe(rawResult => {
+      const result = Array.isArray(rawResult) ? rawResult[0] : rawResult;
       if (result) {
-        // Handle the result which could be a SourceAssetResponseDto or an object wrapper
+        // Handle the result which could be a SourceAssetResponseDto, MediaItemSelection, or object wrapper
         let asset: SourceAssetResponseDto | null = null;
 
         // Check if it's the object wrapper from ImageCropperDialogComponent
         if (result.asset) {
           asset = result.asset;
+        } else if (result.mediaItem) {
+          const mediaItem: MediaItem = result.mediaItem;
+          const index = result.selectedIndex || 0;
+          const gcsUri = mediaItem.gcsUris?.[index] || '';
+          const presignedUrl = mediaItem.presignedUrls?.[index] || gcsUri;
+          const presignedThumb =
+            mediaItem.presignedThumbnailUrls?.[index] || presignedUrl;
+
+          asset = {
+            id: mediaItem.id,
+            userId: mediaItem.userEmail || '',
+            gcsUri: gcsUri,
+            originalFilename:
+              (mediaItem as any).titles?.[index] ||
+              mediaItem.prompt ||
+              'Generated Image',
+            mimeType: mediaItem.mimeType || 'image/png',
+            aspectRatio: mediaItem.aspectRatio || '1:1',
+            fileHash: '',
+            createdAt: mediaItem.createdAt || '',
+            updatedAt: mediaItem.updatedAt || '',
+            presignedUrl: presignedUrl,
+            presignedThumbnailUrl: presignedThumb,
+            presignedOriginalUrl:
+              mediaItem.originalPresignedUrls?.[index] || presignedUrl,
+          };
+          (asset as any).itemType = 'media_item';
+        } else if (result.gcsUris && result.gcsUris.length > 0) {
+          const mediaItem: MediaItem = result;
+          const index = 0;
+          const gcsUri = mediaItem.gcsUris?.[index] || '';
+          const presignedUrl = mediaItem.presignedUrls?.[index] || gcsUri;
+
+          asset = {
+            id: mediaItem.id,
+            userId: mediaItem.userEmail || '',
+            gcsUri: gcsUri,
+            originalFilename:
+              (mediaItem as any).titles?.[index] ||
+              mediaItem.prompt ||
+              'Generated Image',
+            mimeType: mediaItem.mimeType || 'image/png',
+            aspectRatio: mediaItem.aspectRatio || '1:1',
+            fileHash: '',
+            createdAt: mediaItem.createdAt || '',
+            updatedAt: mediaItem.updatedAt || '',
+            presignedUrl: presignedUrl,
+            presignedThumbnailUrl:
+              mediaItem.presignedThumbnailUrls?.[index] || presignedUrl,
+            presignedOriginalUrl:
+              mediaItem.originalPresignedUrls?.[index] || presignedUrl,
+          };
+          (asset as any).itemType = 'media_item';
         } else if (result.id) {
           // It's likely the SourceAssetResponseDto directly
           asset = result as SourceAssetResponseDto;
@@ -206,7 +259,7 @@ export class UpscaleComponent implements OnInit, OnDestroy {
         if (asset) {
           this.selectedAsset = asset;
           this.assetPair.original = {
-            name: asset.originalFilename,
+            name: asset.originalFilename || 'Original Image',
             url: asset.presignedUrl || asset.gcsUri,
           };
           this.assetPair.aspectRatio = asset.aspectRatio;

@@ -60,6 +60,7 @@ class ConfigService(BaseSettings):
     # --- Gemini ---
     GEMINI_MODEL_ID: str = "gemini-2.5-pro"
     GEMINI_AUDIO_ANALYSIS_MODEL_ID: str = "gemini-2.5-pro"
+    STUDIO_ASSISTANT_MODEL_ID: str = "gemini-3-flash-preview"
 
     # --- Database Configuration ---
     INSTANCE_CONNECTION_NAME: str = ""
@@ -72,6 +73,40 @@ class ConfigService(BaseSettings):
 
     # --- Veo ---
     VEO_MODEL_ID: str = "veo-3.1-generate-001"
+
+    # --- Veo Pro Experimental (VPE) ---
+    # Allowlist-gated private preview, so it ships dark: a deployment without
+    # an allowlisted project must never see or call any of it.
+    VPE_ENABLED: bool = False
+    # Not LOCATION. That defaults to "global", which the Veo SDK path accepts
+    # but the veo-experimental publisher endpoint does not: it is reached at
+    # {location}-aiplatform.googleapis.com, and every documented sample calls
+    # us-central1. Reusing LOCATION would build a hostname that resolves to
+    # nothing on a default deployment.
+    VPE_LOCATION: str = "us-central1"
+    # VPE reads and writes Cloud Storage only, and both buckets must sit
+    # inside the allowlisted project, which is not necessarily the project
+    # holding GENMEDIA_BUCKET. Left empty on purpose rather than defaulted:
+    # a wrong bucket fails deep inside a long-running job.
+    VPE_BUCKET: str = ""
+    # The publisher endpoint is allowlist-gated per calling project. In the
+    # intended production deployment this is the same project as PROJECT_ID,
+    # but every other deployment this app runs in - local dev, a corp test
+    # box - is not itself allowlisted, so falling back to PROJECT_ID would
+    # make those environments call under a project that was never
+    # allowlisted. Left empty rather than defaulted for the same reason as
+    # VPE_BUCKET: that failure surfaces as a permission error indistinguishable
+    # from any other until someone reads the project name out of it.
+    VPE_PROJECT_ID: str = ""
+    # Renders and logs the request payload instead of calling the API, so the
+    # whole path can be walked without allowlist access.
+    VPE_DRY_RUN: bool = False
+    # Size of VPE's own thread pool. Deliberately small: each worker is held
+    # for a full job (~315s measured for a 4K upscale), and a shot longer
+    # than the upscaler's 8 second window is split into two jobs, so a modest
+    # number here still represents a lot of queued minutes. Raising it buys
+    # throughput against the service's own capacity, not against the app.
+    VPE_MAX_CONCURRENT_JOBS: int = 3
 
     # --- VTO ---
     VTO_MODEL_ID: str = "virtual-try-on-001"
